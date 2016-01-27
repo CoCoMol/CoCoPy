@@ -5,169 +5,767 @@
 #
 # CoCoPy - A python toolkit for rotational spectroscopy
 #
-# Copyright (c) 2013 by David Schmitz (david.schmitz@chasquiwan.de).
+# Copyright (c) 2016 by David Schmitz (david.schmitz@chasquiwan.de).
 #
-# Permission is hereby granted, free of charge, to any person obtaining a copy of 
-# this software and associated documentation files (the “Software”), to deal in the 
-# Software without restriction, including without limitation the rights to use, 
-# copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the 
-# Software, and to permit persons to whom the Software is furnished to do so, 
+# Permission is hereby granted, free of charge, to any person obtaining a copy of
+# this software and associated documentation files (the “Software”), to deal in the
+# Software without restriction, including without limitation the rights to use,
+# copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+# Software, and to permit persons to whom the Software is furnished to do so,
 # subject to the following conditions:
 #
-# The above copyright notice and this permission notice shall be included in all 
+# The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
 #
-# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
-# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A 
-# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT 
-# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN 
-# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH 
+# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH
 # THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-# 
+#
 # MIT Licence (http://mit-license.org/)
 #
 ################################################################################
 
-import spfit
 import numpy as np
-import helper
+from analysis.util import ProgressBar
 import itertools as it
+import analysis.spfit as spfit
+import analysis.spec as spec
+import copy as cp
+import os
 
-def assign(peaks, lines, bw):
-    ind_l = np.array([], dtype=int)
-    ind_p = np.array([], dtype=int)
-    i = 0
-    for x in lines: 
-        a = np.where(np.abs( peaks[:,0] - x) < bw)[0]
-        if len(a) == 1:
-            ind_l = np.append(ind_l, i)
-            ind_p = np.append(ind_p, a)
-        if len(a) > 1:
-            h = np.where(abs(peaks[a,0] - x) == min(abs(peaks[a,0]-x)))[0]
-            if len(h) > 1:
-                h = h[0]
-            #h = np.where(peaks[a,1] == max(peaks[a,1]))[0]
+'''
+Todo:
+    1. Comment all
+'''
 
-            ind_l = np.append(ind_l, i)
-            ind_p = np.append(ind_p, a[h])
-        i+=1
-        
-    return ind_p, ind_l 
+class Autofit:
 
-def assign_c(peaks, freq, bw):
-    for x in lines: 
-        a = np.where(np.abs( peaks[:,0] - x) < bw)[0]
+    def __init__(self, prefix='test', rot=[3000., 1500., 1000],
+        dip=[1., 1., 1.], temp=.3, min_f=2500., max_f=7000.):
+        '''
+        This class tries to cover everything, which is related to Autofit.
+        '''
 
-    return a
+        self.pred = {
+            'A': 3000., 'B': 1500., 'C': 1000., 'dipA': 1., 'dipB': 1.,
+            'dipC': 1., 'temp': .3, 'min_f': 2500., 'max_f': 7000.,
+            'freq': np.array([]), 'qn': np.array([]), 'intens': np.array([])
+            }
 
-def compare(A, B, C, dipA, dipB, dipC, peaks, bw, cutoff):
-    a = spfit.spfitAsym(A=A, B=B, C=C, dipA=dipA, dipB=dipB, dipC=dipC)
-    a.write_var()
-    a.int_params['flags'] = '0000'
-    a.int_params['fend'] = 20
+        self.fit_qn = {
+            '0': np.array([]), '1': np.array([]), '2': np.array([]),
+            'lin': np.array([]), 'cat': np.array([]), 'freq': np.array([])
+            }
 
-    a.write_int()
-    a.cat_run()
-    a.read_cat()
-    
-    if cutoff < 0:
-        lines = np.where(a.cat_content['lgint'] > cutoff)[0]
+        self.pos_qn = {'qn': np.array([]), 'score': np.array([])}
 
-    else:
-        lines = a.cat_content['lgint'][np.argsort(a.cat_content['lgint'])][-cutoff:]
-        lines = np.where(a.cat_content['lgint'] > min(lines))[0]
-        
-    
-    return assign(peaks, a.cat_content['freq'][lines], bw), a.cat_content, lines
+        self.limits = np.array([])
+
+        self.triples = np.array([])
+
+        self.triples_all = np.array([])
+
+        self.COMB_KEYS = [
+            'A', 'B', 'C', 'A+B', 'A+C', 'B+C', 'A-B', 'A-C', 'B-C', 'A+B+C',
+            'A-B-C', 'A+B-C', 'A-B+C']
+
+        self.comb = {
+            'A': np.array([[1, 0, 0], [2, 0, 0]]),
+            'B': np.array([[0, 1, 0], [0, 2, 0]]),
+            'C': np.array([[0, 0, 1], [0, 0, 2]]),
+            'A+B': np.array([[1, -1, 0], [2, -2, 0]]),
+            'A+C': np.array([[1, 0, -1], [2, 0, -2]]),
+            'B+C': np.array([[0, 1, -1], [0, 2, -2]]),
+            'A-B': np.array([[1, 1, 0], [2, 2, 0]]),
+            'A-C': np.array([[1, 0, 1], [2, 0, 2]]),
+            'B-C': np.array([[0, 1, 1], [0, 2, 2]]),
+            'A+B+C': np.array([[1, 1, -2], [2, 2, -4]]),
+            'A-B-C': np.array([[2, 1, 1], [4, 2, 2]]),
+            'A+B-C': np.array([[1, 1, 2], [2, 2, 4]]),
+            'A-B+C': np.array([[1, 2, 1], [2, 4, 2]])
+            }
+
+        self.peaks = {
+            'all': np.array([]), '0': np.array([]), '1': np.array([]),
+            '2': np.array([])
+            }
+
+        self.result = np.array([])
+
+        self.params = {
+            'min_N_lines': 7, 'bw': .25, 'cutoff': 50, 'start': -1, 'stop': -1,
+            'itera': -1, 'delta_rot': 50, 'delta_freq': 100, 'seed': 1000,
+            'N_triples': 0, 'N_triples_total': 0
+            }
+
+        self.prefix = prefix
+        self.report = prefix
+        self.pred['A'] = rot[0]; self.pred['B'] = rot[1]; self.pred['C'] = rot[2]
+        self.pred['dipA'] = dip[0]; self.pred['dipB'] = dip[1]
+        self.pred['dipC'] = dip[2]; self.pred['temp'] = temp
+        self.pred['min_f'] = min_f; self.pred['max_f'] = max_f
+
+        self.make_pred()
+
+    def make_pred(self):
+        pred = spfit.spfitAsym(fname=self.prefix+'_p', A=self.pred['A'], B=self.pred['B'], C=self.pred['C'])
+
+        pred.int_dipole['dipole'] = np.array([self.pred['dipA'], self.pred['dipB'], self.pred['dipC']])
+        pred.int_params['temp'] = self.pred['temp']
+        pred.int_params['fqlim'] = self.pred['max_f'] / 1000.
+
+        pred.cat_min()
+
+        i_min = min(np.where(pred.cat_content['freq'] > self.pred['min_f'])[0])
+        #i_max = min(np.where(pred.cat_content['freq'] > self.pred['max_f'])[0])
+
+        p_freq = pred.cat_content['freq'][i_min:]
+        p_qn = pred.cat_content['qn'][i_min:]
+        p_int = pred.cat_content['lgint'][i_min:]
+
+        self.pred['freq'] = p_freq[np.argsort(p_int)][::-1]
+        self.pred['qn'] = p_qn[np.argsort(p_int)][::-1]
+        self.pred['intens'] = p_int[np.argsort(p_int)][::-1]
 
 
-def ABC_SCAN(A_R, B_R, C_R, dipA, dipB, dipC, peaks, bw, cutoff, N):
-    result = np.array([])
-    i = 0
-    j=10
-    print '\nScan, bw='+str(bw)+' MHz, Int. cutoff='+str(cutoff) + ', N. of lines='+str(N)
-    p = helper.ProgressBar(len(A_R)*len(B_R)*len(C_R))
+    def assign(self, A, B, C, bw=0):
 
-    for A in A_R:
-        for B in B_R:
-            for C in C_R:
-                
-                (ind_p, ind_l), a, lines = compare(A, B, C, dipA, dipB, dipC, peaks, bw, cutoff)
+        dipA = self.pred['dipA']; dipB = self.pred['dipB']
+        dipC = self.pred['dipC']; temp = self.pred['temp']
+        cutoff = self.params['cutoff']; peaks = self.peaks['all']
+        if bw == 0:
+            bw = self.params['bw']
 
-                if len(ind_p) > N:
-                    fitness = np.sum((a['freq'][lines][ind_l]-peaks[ind_p])**2)/len(ind_p)**2                     
-                    result = np.vstack((result, np.array([fitness, len(ind_p), A, B, C]))) if len(result) > 0 else np.array([fitness, len(ind_p), A, B, C])
-                if np.mod(i, j) == 0:
-                    p.animate(i+j)
-                i+=1
+        pred = spfit.spfitAsym(self.prefix+'_a', A=A, B=B, C=C, dipA=dipA, dipB=dipB, dipC=dipC, temp=temp)
+        pred.int_params['fqlim'] = self.pred['max_f'] / 1000.
 
-    return result[:,2:], result[:,:2]
+        pred.cat_min()
 
-def ABC_SCANR(A_R, B_R, C_R, dipA, dipB, dipC, peaks, bw, cutoff, N_min, N_max=100):
-    result = np.array([])
-    i = 0
-    j=10
-    print '\nScan, bw='+str(bw)+' MHz, Int. cutoff='+str(cutoff) + ', N. of lines='+str(N_min)
-    p = helper.ProgressBar(len(A_R))
-    for A in A_R:
-        (ind_p, ind_l), cat, lines = compare(A, B_R[i], C_R[i], dipA, dipB, dipC, peaks, bw, cutoff)
-        
-        if len(ind_p) >= N_max:
-            ind_h = np.argsort(cat['lgint'][lines][ind_l])
-            ind_p = ind_p[ind_h]
-            ind_l = ind_l[ind_h]
-            dump, ind_h = np.unique(ind_p, return_index=True)
-            ind_l = ind_l[ind_h]
-            ind_p = ind_p[ind_h]
-            intens = cat['lgint'][lines][ind_l][np.argsort(cat['lgint'][lines][ind_l])][-N_max:]
-            ind_i = np.where(cat['lgint'][lines][ind_l] >= min(intens))[0][:N_max]
-                
+        if cutoff < 0:
+            lines = np.where(pred.cat_content['lgint'] > cutoff)[0]
+
         else:
-            ind_i = np.arange(len(ind_p))
+            h = pred.cat_content['lgint'][np.argsort(pred.cat_content['lgint'])][-cutoff:]
+            lines = np.where(pred.cat_content['lgint'] > min(h))[0]
 
-        if len(ind_p) >= N_min:
-            fitness = np.sum((cat['freq'][lines][ind_l][ind_i]-peaks[ind_p][ind_i][:,0])**2)/len(ind_i)**2
-            result = np.vstack((result, np.array([fitness, len(ind_i), A, B_R[i], C_R[i]]))) if len(result) > 0 else np.array([fitness, len(ind_i),A, B_R[i], C_R[i]])
-        if np.mod(i, j) == 0:
-            p.animate(i+j)
-        i+=1
-        
-    return result[:,2:], result[:,:2]
+        qn = pred.cat_content['qn'][lines]
+        lines = pred.cat_content['freq'][lines]
 
-def create_grid(A, B, C, bw, cube_size, sort=False):
+        ind_l = np.array([], dtype=int)
+        ind_p = np.array([], dtype=int)
 
-    N = int(bw/cube_size)/2. - 0.5
-    A_D = np.arange(A-N*cube_size, A+N*cube_size+0.01, cube_size)
-    B_D = np.arange(B-N*cube_size, B+N*cube_size+0.01, cube_size)
-    C_D = np.arange(C-N*cube_size, C+N*cube_size+0.01, cube_size)
-    A_D, B_D, C_D = np.meshgrid(A_D, B_D, C_D)
-    A_D = A_D.flatten(); B_D = B_D.flatten(); C_D = C_D.flatten()
+        i = 0
+        for x in lines:
+            h = np.where(np.abs(peaks[:,0] - x) < bw)[0]
 
-    
-    if sort == True:
-        h = np.sqrt((A_D-A)**2 + (B_D-B)**2 + (C_D-C)**2)
-        h = np.argsort(h)
-        A_D = A_D[h]; B_D = B_D[h], C_D = C_D[h] 
-    
-    return A_D, B_D, C_D
+            if len(h) == 1:
+                h_ = h[0]
+                if h_ not in ind_p:
+                    ind_l = np.append(ind_l, i)
+                    ind_p = np.append(ind_p, h_)
 
-def create_seed(A, B, C, delta, step):
-    A_H = np.array([])
-    B_H = np.array([])
-    C_H = np.array([])
-    
-    for i in np.arange(len(A)):
-        A_D = np.arange(A[i]-delta, A[i]+delta+0.01, step)
-        B_D = np.arange(B[i]-delta, B[i]+delta+0.01, step)
-        C_D = np.arange(C[i]-delta, C[i]+delta+0.01, step)
-        
-        A_D, B_D, C_D = np.meshgrid(A_D, B_D, C_D)
-        
-        A_H = np.append(A_H, A_D.flatten())
-        B_H = np.append(B_H, B_D.flatten())
-        C_H = np.append(C_H, C_D.flatten())
-    return A_H, B_H, C_H
-    
+            if len(h) > 1:
+                h_ = np.where(abs(peaks[:,0] - x) == min(abs(peaks[:,0] - x)))[0]
+                if len(h_) > 1:
+                    h_ = h_[0]
+                if h_ not in ind_p:
+                    ind_l = np.append(ind_l, i)
+                    ind_p = np.append(ind_p, h_)
+            i+=1
+
+        return ind_p, ind_l, qn
+
+    def load_peaks(self, peaks):
+        if type(peaks) == list or type(peaks) == np.ndarray:
+            self.peaks['all'] = spfit.reshape_linelist(peaks)
+
+
+    def lin_dep_debug(self, qn):
+
+        freq = self.pred['freq']
+        A = self.pred['A']; B = self.pred['B']; C = self.pred['C']
+
+        result = np.zeros((13,4))
+        chk = np.zeros((2,2))
+        comb_trans = [[0,1], [0,2], [1,2]]
+        m = 0
+        for y in comb_trans:
+
+            n = 0
+            for key in self.COMB_KEYS:
+
+                i = 0
+                for x in self.comb[key]:
+                    pred = spfit.spfitAsym(self.prefix+'_l', A=A+x[0], B=B+x[1], C=C+x[2], temp=self.pred['temp'])
+                    pred.int_params['fqlim'] = self.pred['max_f'] / 1000.
+                    pred.cat_min()
+
+                    j = 0
+                    for k in y:
+                        freq_org = freq[np.where(self.pred['qn'] == qn[k])[0]]
+                        #print freq_org
+                        freq_shift = pred.cat_content['freq'][np.where(pred.cat_content['qn'] == qn[k])[0]]
+                        #print freq_shift
+                        chk[i,j] = freq_org - freq_shift
+
+                        j += 1
+
+                    i += 1
+
+                result[n,m] = abs(np.linalg.det(chk))
+                n += 1
+                #print key, abs(np.linalg.det(chk))
+            m += 1
+
+        result[:,3] = result[:,0] + result[:,1] + result[:,2]
+
+        return result
+
+    def lin_dependence(self, N=10, max_K=2, diff_J=False, diff_tt=False):
+        '''
+        TODO: Implement max_K
+        TODO: Implement diff_J
+        TODO: Implement diff_tt
+        '''
+
+        qn = self.pred['qn']; freq = self.pred['freq']
+        A = self.pred['A']; B = self.pred['B']; C = self.pred['C']
+
+        if type(N) == int:
+            qn_c = np.array(map(None, it.combinations(range(N), 3)))
+        elif type(N) == list or type(N) == np.ndarray:
+            qn_c = np.array(map(None, it.combinations(N, 3)))
+
+        score = np.zeros(len(qn_c))
+
+        j = 0
+        for y in qn_c:
+            chk = np.zeros((3,3))
+
+            i = 0
+            for x in np.eye(3):
+                pred = spfit.spfitAsym(self.prefix+'_l', A=A+x[0], B=B+x[1], C=C+x[2], temp=self.pred['temp'])
+                pred.int_params['fqlim'] = self.pred['max_f'] / 1000.
+                pred.cat_min()
+
+                for k in range(3):
+                    chk[i,k] = freq[y[k]] - pred.cat_content['freq'][np.where(pred.cat_content['qn'] == qn[y[k]])[0]]
+                i += 1
+
+            score[j] = abs(np.linalg.det(chk))
+            j += 1
+
+        qn_c = qn_c[np.argsort(score)][::-1]
+        score = score[np.argsort(score)][::-1]
+
+        self.pos_qn['qn'] = qn[qn_c]
+        self.pos_qn['score'] = score
+
+        self.choose_qn(0)
+
+        return self.fit_qn
+
+    def choose_qn(self, n):
+        h = spfit.standard_qn(self.pos_qn['qn'][n])
+        self.fit_qn['lin'] = spfit.convert_qn_lin(h)
+        self.fit_qn['cat'] = self.pos_qn['qn'][n]
+
+        for i in range(3):
+            self.fit_qn[str(i)] = h[i]
+
+        freq = np.zeros(3)
+        for i in range(3):
+            freq[i] = self.pred['freq'][np.where(self.pred['qn'] == self.fit_qn['cat'][i])[0]]
+
+        self.fit_qn['freq'] = freq
+
+    def print_qn(self):
+        if len(self.pos_qn['qn']) > 0:
+            i = 0
+            print 'N\tscore\t qn_0\t\t\t\t qn_1\t\t\t\t qn_2\n\n'
+            for qn in self.pos_qn['qn']:
+                h = '{}\t{:2.2f}\t{}\t{}\t{}'.format(i, self.pos_qn['score'][i], qn[0], qn[1], qn[2])
+                h += '\n' + ((len(h)+16) * '-')
+
+                print h
+                i += 1
+
+    def print_pred(self):
+        if len(self.pred['qn']) > 0:
+            i = 0
+            print 'N\tfreq\t qn\t\t\t\tintensity\n\n'
+            for qn in self.pred['qn']:
+                h = '{}\t{:2.2f}\t{}\t{:2.2f}'.format(i, self.pred['freq'][i], qn, self.pred['intens'][i])
+                h += '\n' + ((len(h)+13) * '-')
+
+                print h
+                i += 1
+
+
+    def det_qn(self, qn):
+        h = spfit.standard_qn(qn)
+        self.fit_qn['lin'] = spfit.convert_qn_lin(h)
+        self.fit_qn['cat'] = qn
+
+        for i in range(3):
+            self.fit_qn[str(i)] = h[i]
+
+        self.triples = np.array([])
+        self.triples_all = np.array([])
+
+
+
+    def det_limits_rot(self, delta_rot=0, seed=0):
+
+        if delta_rot != 0:
+            self.params['delta_rot'] = delta_rot
+        else:
+            delta_rot = self.params['delta_rot']
+
+        if seed != 0:
+            self.params['seed'] = seed
+        else:
+            seed = self.params['seed']
+
+        A = self.pred['A']; B = self.pred['B']; C = self.pred['C']
+        A_h, B_h, C_h = self.create_random_seed(A, B, C, delta_rot, seed)
+
+        freq_lim = np.zeros((3,2))
+        freq_lim[:,0] = 1.E9
+        for i in range(len(A_h)):
+
+            pred = spfit.spfitAsym(fname=self.prefix+'_d', A=A_h[i], B=B_h[i], C=C_h[i], temp=self.pred['temp'])
+            pred.int_params['fqlim'] = self.pred['max_f'] / 1000.
+            pred.cat_min()
+
+            for j in range(3):
+                h = pred.cat_content['freq'][np.where(pred.cat_content['qn'] == self.fit_qn['cat'][j])[0]]
+                if h < freq_lim[j,0]:
+                    freq_lim[j,0] = h
+                if h > freq_lim[j,1]:
+                    freq_lim[j,1] = h
+
+        self.limits = freq_lim
+
+        return freq_lim
+
+
+    def det_limits_spec(self, delta_freq=0):
+
+        if delta_freq != 0:
+            self.params['delta_freq'] = delta_freq
+        else:
+            delta_freq = self.params['delta_freq']
+
+        delta = np.zeros(3)
+
+        if type(delta_freq) == list or type(delta_freq) == np.ndarray:
+            if len(delta_freq) == 3:
+                delta[0] = delta_freq[0]; delta[1] = delta_freq[1]; delta[2] = delta_freq[2]
+            else:
+                delta[0] = delta_freq[0]; delta[1] = delta_freq[0]; delta[2] = delta_freq[0]
+        else:
+            delta[0] = delta_freq; delta[1] = delta_freq; delta[2] = delta_freq
+
+
+        freq_lim = np.zeros((3,2))
+
+        for i in range(3):
+            h = self.pred['freq'][np.where(self.pred['qn'] == self.fit_qn['cat'][i])[0]]
+            freq_lim[i,0] = h - delta[i]
+            freq_lim[i,1] = h + delta[i]
+
+        self.limits = freq_lim
+
+        return freq_lim
+
+
+    def det_peaks(self, intens=False):
+        '''
+        TODO: sort by intensity
+        '''
+        def pick_peaks(peaks, f_min, f_max):
+            h1 = np.where(peaks[:,0] > f_min)[0]
+            h2 = np.where(peaks[:,0][h1] < f_max)[0]
+
+            return peaks[h1][h2]
+
+        h = []
+        for x in self.limits:
+            h.append(pick_peaks(self.peaks['all'], x[0], x[1]))
+
+        for i in range(3):
+            self.peaks[str(i)] = h[i][np.argsort(abs(h[i][:,0] - self.pred['freq'][np.where(self.pred['qn'] == self.fit_qn['cat'][i])[0]]))]
+
+        self.params['N_triples_total'] = len(self.peaks['0']) * len(self.peaks['1']) * len(self.peaks['2'])
+        self.triples_all = np.array([])
+
+        return len(self.peaks['0']), len(self.peaks['1']), len(self.peaks['2']), self.params['N_triples_total']
+
+    def define_triples(self, start=-1, stop=-1, itera=-1):
+
+        if stop < 0:
+            if self.params['stop'] < 0:
+                stop = self.params['N_triples_total'] + 1
+                self.params['stop'] = stop
+            else:
+                stop = self.params['stop']
+        else:
+            self.params['stop'] = stop
+
+        if start < 0:
+            if self.params['start'] < 0:
+                start = 0
+                self.params['start'] = 0
+            else:
+                start = self.params['start']
+        else:
+            self.params['start'] = start
+
+        if itera < 0:
+            if self.params['itera'] > 0:
+                itera = self.params['itera']
+        else:
+            self.params['itera'] = itera
+
+        l0 = len(self.peaks['0'][:,0]); l1 = len(self.peaks['1'][:,0]);
+        l2 = len(self.peaks['2'][:,0])
+
+        if len(self.triples_all) == 0:
+            triples = np.array([list(i) for i in it.product(range(l0), range(l1), range(l2))])
+            h = [np.sum(triples[i]) for i in range(len(triples))]
+            self.triples_all = triples[np.argsort(h)]
+            triples = triples[np.argsort(h)]
+        else:
+            triples = self.triples_all
+
+        if itera < 0 and self.params['itera'] < 0:
+            triples = triples[start:stop]
+        else:
+            triples = triples[start::itera]
+
+        self.params['N_triples'] = len(triples)
+        self.triples = triples
+
+        return len(triples)
+
+    def del_files(self, del_all=False):
+        import glob
+        flist = glob.glob(self.prefix+'*')
+        for x in flist:
+            if del_all:
+                os.remove(x)
+            elif 'result' not in x and '.pkl' not in x:
+                os.remove(x)
+
+    def run_autofit(self, triples=-1, verbose=False):
+        if triples == -1:
+            triples = self.triples
+
+        else:
+            self.triples = triples
+
+        p0 = self.peaks['0'][:,0]; p1 = self.peaks['1'][:,0];
+        p2 = self.peaks['2'][:,0]
+
+        qn = self.fit_qn['lin']
+        A = self.pred['A']; B = self.pred['B']; C = self.pred['C']
+        result = np.array([])
+
+        if verbose == True:
+            m = 0
+            p = ProgressBar(len(triples))
+
+
+        for x in triples:
+            fit = spfit.spfitAsym(fname = self.prefix + '_f', A=A, B=B, C=C)
+            fit.lin_content['freq'] = np.array([p0[x[0]], p1[x[1]], p2[x[2]]])
+            fit.lin_content['qn'] = qn
+            fit.par_params['errtst'] = 1000/0.02
+
+            fit.fit_min()
+
+            if verbose == True:
+                if np.mod(m, 10) == 0:
+                    p.animate(m)
+                m += 1
+
+
+            if fit.fit_content['err_mw_rms'] >= 0. and fit.fit_content['err_mw_rms'] < .1 and fit.fit_content['reject'] == False and fit.fit_content['err_new_rms'] < 1.:
+
+                A = fit.par_fitpar['par'][0]; B = fit.par_fitpar['par'][1]
+                C = fit.par_fitpar['par'][2]
+
+                err = fit.fit_content['err_mw_rms']
+
+                ind_p, ind_l, qn_ = self.assign(A, B, C)
+                N = len(ind_p)
+
+                if len(ind_p) >= self.params['min_N_lines']:
+
+                    h = np.array([A, B, C, N, err])
+                    result = h if len(result) == 0 else np.vstack((result, h))
+
+        self.result = result[np.argsort(result[:,3])][::-1]
+
+        return self.result
+
+    def write_report(self):
+        fname = self.report + '_result.txt'
+        if len(self.result) > 0:
+            fmt = ('%.2f', '%.2f', '%.2f', '%d','%.2e')
+            np.savetxt(fname, self.result, fmt=fmt)
+
+    def refit(self, A, B, C, err, peaks, qn):
+        fit = spfit.spfitAsym(fname=self.prefix+'_rf', A=A, B=B, C=C)
+        fit.lin_content['freq'] = peaks
+        fit.lin_content['qn'] = qn
+        fit.par_params['errtst'] = err/0.02
+
+        fit.fit_min()
+
+        if fit.fit_content['err_mw_rms'] >= 0 and fit.fit_content['err_mw_rms'] < .1:
+            rot = fit.var_fitpar['par']
+            ind_p, ind_l, qn_ = self.assign(rot[0], rot[1], rot[2])
+            A = fit.var_fitpar['par'][0]; B = fit.var_fitpar['par'][1]
+            C = fit.var_fitpar['par'][2];
+            fitted = fit.fit_content['N_fitted_lines']
+
+            return A, B, C, ind_p, ind_l, qn_, fitted, True
+
+        else:
+            return A, B, C, -1, -1, -1, -1, False
+
+    def create_random_seed(self, A, B, C, delta, N):
+
+        if type(delta) == list or type(delta) == np.ndarray:
+            if len(delta) == 3:
+                dA = delta[0]; dB = delta[1]; dC = delta[2]
+            else:
+                dA = delta[0]; dB = delta[0]; dC = delta[0]
+        else:
+            dA = delta; dB = delta; dC = delta
+
+        A_H = (np.random.rand(N)*2.-1.)*dA + A
+        B_H = (np.random.rand(N)*2.-1.)*dB + B
+        C_H = (np.random.rand(N)*2.-1.)*dC + C
+
+        return self.check_const(A_H, B_H, C_H)
+
+    def check_const(self, A, B, C):
+
+        h = B-C; h = np.where(h[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
+        h = A-C; h = np.where(h[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
+        h = A-B; h = np.where(h[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
+
+        h = np.where(A[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
+        h = np.where(B[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
+        h = np.where(C[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
+
+        return A, B, C
+
+    def read_result(self, path=''):
+
+        if path == '':
+            path = os.getcwd()
+
+        if os.path.exists(path):
+            self.path = path
+
+            import glob
+            filelist = glob.glob(os.path.join(self.path, '*result.txt'))
+
+            result = np.array([])
+
+            for x in filelist:
+                h = np.loadtxt(x)
+                if len(result) > 0:
+                    result = np.vstack((result, h))
+                else:
+                    result = h
+
+            self.result = result[np.argsort(result[:,3])][::-1]
+            return self.result
+
+        else:
+            return np.array([])
+
+    def refine_result(self, n = 1000, err=.0, limit=0.03):
+        #TODO: Add progress bar
+        if len(self.result) > 0:
+            if err == .0:
+                err = self.params['bw']
+
+            result = np.array([])
+
+            for x in self.result[:n]:
+                ind_p, ind_l, qn_ = self.assign(x[0], x[1], x[2])
+                check = True; A_ = x[0]; B_ = x[1]; C_ = x[2]
+
+                while len(ind_p) >= self.params['min_N_lines'] and err > limit and check:
+                    peaks_h = self.peaks['all'][ind_p][:,0]
+                    qn_h = spfit.convert_qn_cat_lin(qn_[ind_l])
+                    A_, B_, C_, ind_p, ind_l, qn_, N_, check = self.refit(A_, B_, C_, err, peaks_h, qn_h)
+                    err /= 2.
+
+                h = np.array([A_, B_, C_, N_, err*2.])
+                result = h if len(result) == 0 else np.vstack((result, h))
+
+            return result[np.argsort(result[:,3])][::-1]
+
+    def plot_result(self, n=1000, dim=.0):
+
+        import matplotlib.pyplot as plt
+        import matplotlib as mplib
+        from mpl_toolkits.mplot3d import Axes3D
+
+        if len(self.result) > 0:
+
+            if dim == 0:
+                dim = self.params['delta_rot']
+
+            fig = plt.figure()
+
+            ax = fig.add_subplot(111, projection='3d')
+            plt.subplots_adjust(right=.8)
+
+            A = self.pred['A']; B = self.pred['B']; C = self.pred['C']
+
+            ax.scatter([A], [B], [C], marker='^', c='green', s=400, edgecolors=['none'])
+
+            result = self.result[:n]
+
+            norm = mplib.colors.Normalize(vmin=min(result[:,3]), vmax=max(result[:,3]))
+            cmap = mplib.cm.jet_r
+
+            co = mplib.cm.ScalarMappable(norm=norm, cmap=cmap)
+
+            ax.scatter(result[:,0], result[:,1], result[:,2], marker='o', lw = 0, c=co.to_rgba(result[:,3]))
+
+
+            ax.set_xlim(A-dim, A+dim)
+            ax.set_ylim(B-dim, B+dim)
+            ax.set_zlim(C-dim, C+dim)
+
+            ax.xaxis.set_rotate_label(True)
+            ax.yaxis.set_rotate_label(True)
+            ax.zaxis.set_rotate_label(True)
+
+            ax.set_xlabel('\nA (MHz)', linespacing=1)
+            ax.set_ylabel('\nB (MHz)', linespacing=1)
+            ax.set_zlabel('\nC (MHz)', linespacing=.5)
+
+            ax.azim = -55
+            ax.elev = 25
+
+            #cx = fig.add_axes([0.9, 0.1, 0.03, 0.8])
+            bx = fig.add_axes([0.85, 0.3, 0.03, 0.4])
+            cb = mplib.colorbar.ColorbarBase(bx, cmap=cmap, norm=norm)
+            #fig.set_tight_layout(True)
+            cb.set_label('fitness: N. of lines')
+
+            return fig, ax
+
+    def print_result(self, start=0, stop=100):
+        if len(self.result) > 0:
+            print 'N\tA\tB\t C\t\tN_lines\t\t err\n\n'
+
+            i = 0
+            for x in self.result[start:stop]:
+                h = '{:d}\t{:2.2f}\t{:2.2f}\t{:2.2f}\t\t{:d}\t\t{:2.2e}'.format(i, x[0], x[1], x[2], int(x[3]), x[4])
+                h += '\n' + ((len(h)+27) * '-')
+                print h
+                i += 1
+
+    def run_autofit_parallel(self, N):
+        import multiprocessing
+
+        def run_parallel(fname, i):
+            task = load_task(fname, i)[0][0]
+
+            task.report = task.prefix
+            task.run_autofit(verbose=False)
+            task.write_report()
+            task.del_files()
+
+        create_tasks(self, N, seq=True, ret=False)
+
+        check = list([])
+        for i in range(N):
+            p = multiprocessing.Process(target=run_parallel, args=(self.prefix,i))
+            p.start()
+            check.append(p)
+
+        for i in range(N):
+            check[i].join()
+
+        self.read_result()
+        self.del_files(del_all=True)
+
+    def easy_fit(self, n_dep=10, bw_rot=20.):
+        self.lin_dependence(n_dep)
+        self.det_limits_rot(bw_rot)
+        self.det_peaks()
+        self.define_triples()
+        self.del_files()
+
+        return self.params['N_triples_total']
+
+################################################################################
+
+class AutofitGWDG(Autofit):
+    def run_autofit(self, triples=-1):
+        if triples == -1:
+            triples = self.triples
+
+        else:
+            self.triples = triples
+
+        p0 = self.peaks['0'][:,0]; p1 = self.peaks['1'][:,0];
+        p2 = self.peaks['2'][:,0]
+
+        qn = self.fit_qn['lin']
+        A = self.pred['A']; B = self.pred['B']; C = self.pred['C']
+        result = np.array([])
+
+        for x in triples:
+            fit = spfit.spfitAsym(fname = self.prefix + '_f', A=A, B=B, C=C)
+            fit.lin_content['freq'] = np.array([p0[x[0]], p1[x[1]], p2[x[2]]])
+            fit.lin_content['qn'] = qn
+            fit.par_params['errtst'] = 1000/0.02
+
+            fit.fit_min()
+
+            if fit.fit_content['err_mw_rms'] >= 0. and fit.fit_content['err_mw_rms'] < .1 and fit.fit_content['reject'] == False and fit.fit_content['err_new_rms'] < 1.:
+
+                A = fit.par_fitpar['par'][0]; B = fit.par_fitpar['par'][1]
+                C = fit.par_fitpar['par'][2]
+
+                err = fit.fit_content['err_mw_rms']
+
+                ind_p, ind_l, qn_ = self.assign(A, B, C)
+                N = len(ind_p)
+
+                if len(ind_p) >= self.params['min_N_lines']:
+
+                    h = np.array([A, B, C, N, err])
+                    result = h if len(result) == 0 else np.vstack((result, h))
+
+        self.result = result[np.argsort(result[:,3])][::-1]
+
+        return self.result
+
+    def write_report(self):
+        fname = self.report + '_result.txt'
+        if len(self.result) > 0:
+            fmt = ('%.2f', '%.2f', '%.2f', '%d','%.2e')
+            np.savetxt(fname, self.result, fmt=fmt)
+
+################################################################################
+
 def create_random_seed(A, B, C, delta, N):
     A_H = (np.random.rand(N)*2.-1.)*delta + A
     B_H = (np.random.rand(N)*2.-1.)*delta + B
@@ -175,8 +773,8 @@ def create_random_seed(A, B, C, delta, N):
 
     return check_const(A_H, B_H, C_H)
 
-def check_const(A,B,C):
-    
+def check_const(A, B, C):
+
     h = B-C; h = np.where(h[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
     h = A-C; h = np.where(h[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
     h = A-B; h = np.where(h[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
@@ -186,289 +784,172 @@ def check_const(A,B,C):
     h = np.where(C[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
 
     return A, B, C
-    
-def refine(par, dx):
-    
-    par_h = np.array([0,0,0])
 
-    for x in par:
-        par_h = np.vstack((par_h, [x[0]+dx, x[1], x[2]]))
-        par_h = np.vstack((par_h, [x[0], x[1]+dx, x[2]]))
-        par_h = np.vstack((par_h, [x[0], x[1], x[2]+dx]))
-#        par_h = np.vstack((par_h, [x[0]+dx, x[1]+dx, x[2]]))
-#        par_h = np.vstack((par_h, [x[0]+dx, x[1], x[2]+dx]))
-#        par_h = np.vstack((par_h, [x[0], x[1]+dx, x[2]+dx]))
-#        par_h = np.vstack((par_h, [x[0]+dx, x[1]+dx, x[2]+dx]))
-        par_h = np.vstack((par_h, [x[0]-dx, x[1], x[2]]))
-        par_h = np.vstack((par_h, [x[0], x[1]-dx, x[2]]))
-        par_h = np.vstack((par_h, [x[0], x[1], x[2]-dx]))
-#        par_h = np.vstack((par_h, [x[0]-dx, x[1]-dx, x[2]]))
-#        par_h = np.vstack((par_h, [x[0]-dx, x[1], x[2]-dx]))
-#        par_h = np.vstack((par_h, [x[0], x[1]-dx, x[2]-dx]))
-#        par_h = np.vstack((par_h, [x[0]-dx, x[1]-dx, x[2]-dx]))
+def create_tasks(afit, N_tasks=2, seq=True, ret=False):
 
-    return par_h[1:]
+    import pickle
+    tasks = list([])
+    N_total = afit.params['N_triples_total']
+    with open(afit.prefix + '_tasks.pkl', 'wb') as output:
 
+        if seq:
+            for i in range(N_tasks):
+                start = i * N_total/N_tasks
+                stop = (i+1) * N_total/N_tasks
+                h = cp.deepcopy(afit)
+                h.define_triples(start=start, stop=stop, itera=-1)
+                h.triples_all = np.array([])
+                h.prefix = h.prefix + '_' + str(i)
+                pickle.dump(h, output, pickle.HIGHEST_PROTOCOL)
+                if ret:
+                    tasks.append(h)
+                del h
 
-def fit(seed, dipA, dipB, dipC, peaks, bw, cutoff, N_min, N_max):
-
-    for y in bw:
-
-        fitness = np.array([])
-        par = np.array([])
-        i = 0
-        j=10
-        print '\nFit, bw='+str(y)+' MHz, Int. cutoff='+str(cutoff) + ', N. of lines='+str(N_min) +' - '+str(N_max) 
-        p = helper.ProgressBar(len(seed))
-        for x in seed:
-
-            (ind_p, ind_l), cat, lines = compare(A=x[0], B=x[1], C=x[2], dipA=dipA, dipB=dipB, dipC=dipC, peaks=peaks, bw=y, cutoff=cutoff)
-            
-            if np.mod(i, j) == 0:
-                p.animate(i+j)
-            i+=1
-            if len(ind_p) >= N_max:
-                ind_h = np.argsort(cat['lgint'][lines][ind_l])
-                ind_p = ind_p[ind_h]
-                ind_l = ind_l[ind_h]
-                dump, ind_h = np.unique(ind_p, return_index=True)
-                ind_l = ind_l[ind_h]
-                ind_p = ind_p[ind_h]
-                intens = cat['lgint'][lines][ind_l][np.argsort(cat['lgint'][lines][ind_l])][-N_max:]
-                ind_i = np.where(cat['lgint'][lines][ind_l] >= min(intens))[0][:N_max]
-                
-            else:
-                ind_i = np.arange(len(ind_p))
-            
-            if len(ind_p) >= N_min:
-
-                a = spfit.spfitAsym(fname = 'test_fit', A=x[0], B=x[1], C=x[2], dipA=dipA, dipB=dipB, dipC=dipC)
-
-                a.lin_content['freq'] = peaks[ind_p][:,0][ind_i]
-                a.lin_content['qn'] = spfit.convert_qn_cat_lin(cat['qn'][lines][ind_l][ind_i])
-                a.par_params['errtst'] = y/0.02
-
-                a.write_par()
-                a.write_int()
-                a.write_lin()
-                a.fit_run()
-                a.read_fit()
-                a.read_var()
-
-                if a.fit_content['err_mw_rms'] > 0.001 and a.fit_content['err_new_rms'] < 1000.:
-
-                    fitness = np.vstack((fitness, np.array([a.fit_content['err_mw_rms'], len(ind_p)]))) if len(fitness) > 0 else np.array([a.fit_content['err_mw_rms'], len(ind_p)])
-                    par = np.vstack((par, a.var_fitpar['par'])) if len(par) > 0 else np.array([a.var_fitpar['par']])
-
-        seed = np.array(par)
-    
-    return par, fitness
-    
-def fit_c(seed, dipA, dipB, dipC, peaks, bw, cutoff, N_min, N_max):
-
-    for y in bw:
-
-        fitness = np.array([])
-        par = np.array([])
-        i = 0
-        j=10
-        print '\nFit, bw='+str(y)+' MHz, Int. cutoff='+str(cutoff) + ', N. of lines='+str(N_min) +' - '+str(N_max) 
-        p = helper.ProgressBar(len(seed))
-        for x in seed:
-
-            (ind_p, ind_l), cat, lines = compare(A=x[0], B=x[1], C=x[2], dipA=dipA, dipB=dipB, dipC=dipC, peaks=peaks, bw=y, cutoff=cutoff)
-            
-            if np.mod(i, j) == 0:
-                p.animate(i+j)
-            i+=1
-            if len(ind_p) >= N_max:
-                ind_h = np.argsort(cat['lgint'][lines][ind_l])
-                ind_p = ind_p[ind_h]
-                ind_l = ind_l[ind_h]
-                dump, ind_h = np.unique(ind_p, return_index=True)
-                ind_l = ind_l[ind_h]
-                ind_p = ind_p[ind_h]
-                intens = cat['lgint'][lines][ind_l][np.argsort(cat['lgint'][lines][ind_l])][-N_max:]
-                ind_i = np.where(cat['lgint'][lines][ind_l] >= min(intens))[0][:N_max]
-                
-            else:
-                ind_i = np.arange(len(ind_p))
-                
-            
-            if len(ind_p) >= N_min:
-                
-                for f in it.combinations([0,1,2,3,4],4):
-                    
-                    x1 = peaks[np.where(np.abs( peaks[:,0] - cat['freq'][lines][ind_l][ind_i][list(f)][0]) < y)[0], 0]
-                    x2 = peaks[np.where(np.abs( peaks[:,0] - cat['freq'][lines][ind_l][ind_i][list(f)][1]) < y)[0], 0]
-                    x3 = peaks[np.where(np.abs( peaks[:,0] - cat['freq'][lines][ind_l][ind_i][list(f)][2]) < y)[0], 0]
-                    x4 = peaks[np.where(np.abs( peaks[:,0] - cat['freq'][lines][ind_l][ind_i][list(f)][3]) < y)[0], 0]
-                    
-                    for l in x1:
-                        for m in x2:
-                            for n in x3:
-                                for o in x4:
-                                    a = spfit.spfitAsym(fname = 'test_fit', A=x[0], B=x[1], C=x[2], dipA=dipA, dipB=dipB, dipC=dipC)
-                                    
-                                    a.lin_content['freq'] = np.array([l, m, n, o])
-                                    a.lin_content['qn'] = spfit.convert_qn_cat_lin(cat['qn'][lines][ind_l][ind_i][list(f)])
-                                    a.par_params['errtst'] = y/0.02
-                    
-                                    a.write_par()
-                                    a.write_int()
-                                    a.write_lin()
-                                    a.fit_run()
-                                    a.read_fit()
-                                    a.read_var()
-                                    
-                                    if a.fit_content['err_mw_rms'] > 0.001 and a.fit_content['err_new_rms'] < 10.:
-                                        fitness = np.vstack((fitness, np.array([a.fit_content['err_mw_rms'], len(ind_p)]))) if len(fitness) > 0 else np.array([a.fit_content['err_mw_rms'], len(ind_p)])
-                                        par = np.vstack((par, a.var_fitpar['par'])) if len(par) > 0 else np.array([a.var_fitpar['par']])
-                                    
-            seed = np.array(par)
-                        
-        return par, fitness
-
-def fit_d(seed, dipA, dipB, dipC, peaks, bw, cutoff, N_min, N_max):
-
-    for y in bw:
-
-        fitness = np.array([])
-        par = np.array([])
-        i = 0
-        j=1
-        print '\nFit, bw='+str(y)+' MHz, Int. cutoff='+str(cutoff) + ', N. of lines='+str(N_min) +' - '+str(N_max) 
-        p = helper.ProgressBar(len(seed))
-        for x in seed:
-
-            (ind_p, ind_l), cat, lines = compare(A=x[0], B=x[1], C=x[2], dipA=dipA, dipB=dipB, dipC=dipC, peaks=peaks, bw=y, cutoff=cutoff)
-            
-            if np.mod(i, j) == 0:
-                p.animate(i+j)
-            i+=1
-            if len(ind_p) >= N_min:
-
-                ind_h = np.argsort(cat['lgint'][lines][ind_l])
-                ind_p = ind_p[ind_h]
-                ind_l = ind_l[ind_h]
-                dump, ind_h = np.unique(ind_p, return_index=True)
-                ind_l = ind_l[ind_h]
-                ind_p = ind_p[ind_h]
-                intens = cat['lgint'][lines][ind_l][np.argsort(cat['lgint'][lines][ind_l])][-N_max:]
-                ind_i = np.where(cat['lgint'][lines][ind_l] >= min(intens))[0][:N_max]
-                
-                np.random.shuffle(ind_i)
-                ind_i=ind_i[:4]
-
-            
-            if len(ind_p) >= N_min:
-                                    
-                h1 = np.where(np.abs( peaks[:,0] - cat['freq'][lines][ind_l][ind_i][0]) < y)[0]
-                h2 = np.argsort(peaks[h1][:,1]); x1 = peaks[h1][h2][-4:,0]
-                h1 = np.where(np.abs( peaks[:,0] - cat['freq'][lines][ind_l][ind_i][1]) < y)[0]
-                h2 = np.argsort(peaks[h1][:,1]); x2 = peaks[h1][h2][-4:,0]
-                h1 = np.where(np.abs( peaks[:,0] - cat['freq'][lines][ind_l][ind_i][2]) < y)[0]
-                h2 = np.argsort(peaks[h1][:,1]); x3 = peaks[h1][h2][-4:,0]
-                h1 = np.where(np.abs( peaks[:,0] - cat['freq'][lines][ind_l][ind_i][3]) < y)[0]
-                h2 = np.argsort(peaks[h1][:,1]); x4 = peaks[h1][h2][-4:,0]
-                
-                for l in x1:
-                    for m in x2:
-                        for n in x3:
-                            for o in x4:
-                                a = spfit.spfitAsym(fname = 'test_fit', A=x[0], B=x[1], C=x[2], dipA=dipA, dipB=dipB, dipC=dipC)
-                                
-                                a.lin_content['freq'] = np.array([l, m, n, o])
-                                a.lin_content['qn'] = spfit.convert_qn_cat_lin(cat['qn'][lines][ind_l][ind_i])
-                                a.par_params['errtst'] = y/0.02
-                                a.par_params['nitr'] = 20
-                
-                                a.write_par()
-                                a.write_int()
-                                a.write_lin()
-                                a.fit_run()
-                                a.read_fit()
-                                a.read_var()
-                                
-                                if a.fit_content['err_mw_rms'] > 0.001 and a.fit_content['err_new_rms'] < 100.:
-                                    fitness = np.vstack((fitness, np.array([a.fit_content['err_mw_rms'], len(ind_p)]))) if len(fitness) > 0 else np.array([a.fit_content['err_mw_rms'], len(ind_p)])
-                                    par = np.vstack((par, a.var_fitpar['par'])) if len(par) > 0 else np.array([a.var_fitpar['par']])
-                                    
-            seed = np.array(par)
-                        
-        return par, fitness
-
-
-def fit_b(seed, dipA, dipB, dipC, peaks, bw, cutoff, N_min, N_max):
-
-    for y in bw:
-
-        fitness = np.array([])
-        par = np.array([])
-        i = 0
-        j=10
-        print '\nFit, bw='+str(y)+' MHz, Int. cutoff='+str(cutoff) + ', N. of lines='+str(N_min) +' - '+str(N_max) 
-        p = helper.ProgressBar(len(seed))
-        for x in seed:
-
-            (ind_p, ind_l), cat, lines = compare(A=x[0], B=x[1], C=x[2], dipA=dipA, dipB=dipB, dipC=dipC, peaks=peaks, bw=y, cutoff=cutoff)
-            
-            if np.mod(i, j) == 0:
-                p.animate(i+j)
-            i+=1
-            if len(ind_p) >= N_max:
-                ind_h = np.argsort(cat['lgint'][lines][ind_l])
-                ind_p = ind_p[ind_h]
-                ind_l = ind_l[ind_h]
-                dump, ind_h = np.unique(ind_p, return_index=True)
-                ind_l = ind_l[ind_h]
-                ind_p = ind_p[ind_h]
-                intens = cat['lgint'][lines][ind_l][np.argsort(cat['lgint'][lines][ind_l])][-N_max:]
-                ind_i = np.where(cat['lgint'][lines][ind_l] >= min(intens))[0][:N_max]
-                                    
-            else:
-                ind_i = np.arange(len(ind_p))
-                
-            
-            if len(ind_p) >= N_min:
-                                
-                for l in it.combinations([0,1,2,3,4,5,6,7],5):
-                    a = spfit.spfitAsym(fname = 'test_fit', A=x[0], B=x[1], C=x[2], dipA=dipA, dipB=dipB, dipC=dipC)
-                    
-                    a.lin_content['freq'] = peaks[ind_p][:,0][ind_i][list(l)]
-                    a.lin_content['qn'] = spfit.convert_qn_cat_lin(cat['qn'][lines][ind_l][ind_i][list(l)])
-                    a.par_params['errtst'] = y/0.02
-    
-                    a.write_par()
-                    a.write_int()
-                    a.write_lin()
-                    a.fit_run()
-                    a.read_fit()
-                    a.read_var()
-                    
-                    if a.fit_content['err_mw_rms'] > 0.000001:
-                        fitness = np.vstack((fitness, np.array([a.fit_content['err_mw_rms'], len(ind_p)]))) if len(fitness) > 0 else np.array([a.fit_content['err_mw_rms'], len(ind_p)])
-                        par = np.vstack((par, a.var_fitpar['par'])) if len(par) > 0 else np.array([a.var_fitpar['par']])
-                                
-        seed = np.array(par)
-                    
-    return par, fitness
-
-
-def find_duplicates(par, delta):
-    par_h = np.array([])
-    i=0
-    ind = [0]
-    
-    for x in np.array(par):
-        if len(par_h) > 0:
-            sig=(par_h[:,0]-x[0])**2+(par_h[:,1]-x[1])**2+(par_h[:,2]-x[2])**2
-            if len(np.where(sig[:] < delta)[0]) == 0:
-                par_h = np.vstack((par_h, x))
-                ind.append(i)
         else:
-            par_h = np.array([x])
-        
-        i+=1
-        
-    return par_h, ind
+            for i in range(N_tasks):
+                start = i
+                itera = N_tasks
+                h = cp.deepcopy(afit)
+                h.define_triples(start=start, stop=-1, itera=itera)
+                h.triples_all = np.array([])
+                h.prefix = h.prefix + '_' + str(i)
+                pickle.dump(h, output, pickle.HIGHEST_PROTOCOL)
+                if ret:
+                    tasks.append(h)
+                del h
+
+    return tasks
+
+def load_task(name, tasks_id=-1):
+
+    import pickle
+
+    if '.pkl' in name:
+        infile = open(name, 'rb')
+    else:
+        infile = open(name+'_tasks.pkl', 'rb')
+
+    if type(tasks_id) == int:
+        tasks_id = list([tasks_id])
+
+    if type(tasks_id) == list or type(tasks_id) == np.ndarray:
+        tasks_id = list(tasks_id)
+
+    tasks = list([])
+    i = 0
+    while 1:
+        try:
+            if i in tasks_id or -1 in tasks_id:
+                tasks.append(pickle.load(infile))
+            else:
+                dump = pickle.load(infile)
+            i += 1
+        except (EOFError):
+            break
+    infile.close()
+
+    return tasks, i
+
+################################################################################
+
+class GwdgJobs():
+    def __init__(self, job='test', path='', queue='mpi-short'):
+        self.job = job
+        self.queue = queue
+        self.filelist = []
+        self.message = False
+
+        self.walltime = {
+            'fat-short': 2, 'mpi-short': 2, 'fat': 48, 'mpi': 48,
+            'fat-long': 120, 'mpi-long': 120
+            }
+
+        self.header = '#!/bin/sh\n\
+        #BSUB -L /bin/sh\n#BSUB -q {}\n\
+        #BSUB -n 1\n\
+        #BSUB -R "span[hosts=1]"\n\
+        #BSUB -W {}:00\n\
+        #BSUB -M 8000000\n\
+        #BSUB -R scratch\n'
+
+        self.header = self.header.replace('    ', '')
+
+        self.body = '\nexport PATH=$HOME/bin:$PATH\n\
+        mkdir -p /scratch/${{USER}}\n\
+        MYSCRATCH=`mktemp -d /scratch/${{USER}}/py.XXXXXXXX`\n\
+        python autofit_gwdg.py {} {} $MYSCRATCH\n\
+        rm -rf $MYSCRATCH'
+
+        self.body = self.body.replace('    ', '')
+
+        if path == '':
+            path = os.getcwd()
+
+        if os.path.exists(path):
+            self.path = path
+
+            if os.path.exists(os.path.join(self.path, job + '_tasks.pkl')):
+                self.job = job
+            else:
+                print 'File: ' + os.path.join(self.path, job) + '_tasks.pkl does not exist. Please correct!'
+
+        else:
+            print 'Path: ' + path + ' does not exist. Please correct!'
+
+
+    def del_files(self, ext='job', rm_batch = True):
+        #
+        import glob
+        if len(glob.glob('*.' + ext)) > 0:
+            for x in glob.glob('*.' + ext):
+                os.remove(x)
+        if rm_batch == True:
+            if len(glob.glob('batch.sh')) > 0:
+                os.remove('batch.sh')
+
+    def write_job_files(self, queue=''):
+
+        self.header = self.make_header(self.message, queue)
+        self.del_files()
+
+        #catch exception
+        task, N = load_task(os.path.join(self.path, self.job + '_tasks.pkl'), 10000)
+
+        for i in range(N):
+            filename = 'AFIT_' + self.job + '_' + str(i) + '.job'
+
+            f = open(os.path.join(self.path, filename), 'w+')
+            filestr = self.header + self.make_body(i)
+            f.write(filestr)
+            f.close()
+
+            self.filelist.append(filename)
+
+        self.write_batch_file()
+
+
+    def make_header(self, message=False, queue=''):
+        #
+        if message == True:
+            self.header += '#BSUB -N\n'
+        else:
+            self.header += '#BSUB -o /dev/null sleep 5\n'
+
+        if queue == '':
+            queue = self.queue
+        else:
+            self.queue = queue
+
+        return self.header.format(self.queue, self.walltime[self.queue])
+
+    def make_body(self, i):
+        return self.body.format(self.job, i)
+
+    def write_batch_file(self):
+        #TODO: Fix newline
+        f = open(os.path.join(self.path, 'batch.sh'), 'w+')
+        for x in self.filelist:
+            f.write('bsub < ' + x + '\n')
+        f.close()
+
+################################################################################

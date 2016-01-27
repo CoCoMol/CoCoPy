@@ -31,25 +31,25 @@
 #
 # CoCoPy - A python toolkit for rotational spectroscopy
 #
-# Copyright (c) 2013 by David Schmitz (david.schmitz@chasquiwan.de).
+# Copyright (c) 2016 by David Schmitz (david.schmitz@chasquiwan.de).
 #
-# Permission is hereby granted, free of charge, to any person obtaining a copy of 
-# this software and associated documentation files (the “Software”), to deal in the 
-# Software without restriction, including without limitation the rights to use, 
-# copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the 
-# Software, and to permit persons to whom the Software is furnished to do so, 
+# Permission is hereby granted, free of charge, to any person obtaining a copy of
+# this software and associated documentation files (the “Software”), to deal in the
+# Software without restriction, including without limitation the rights to use,
+# copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the
+# Software, and to permit persons to whom the Software is furnished to do so,
 # subject to the following conditions:
 #
-# The above copyright notice and this permission notice shall be included in all 
+# The above copyright notice and this permission notice shall be included in all
 # copies or substantial portions of the Software.
 #
-# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, 
-# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A 
-# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT 
-# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN 
-# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH 
+# THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+# INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+# PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+# HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN
+# ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH
 # THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-# 
+#
 # MIT Licence (http://mit-license.org/)
 #
 ################################################################################
@@ -58,7 +58,7 @@
 Todo:
     - 1 Write comments
     - 2
-    - 3 
+    - 3
 '''
 
 """
@@ -134,7 +134,7 @@ class Atom(Vertex):
 
     @property
     def mass(self): return self.element.mass
-    
+
     @property
     def number(self): return self.element.number
 
@@ -341,7 +341,7 @@ class Bond(Edge):
         elif self.order == 'D': self.order = 'T'
         else:
             print 'Error'
-        
+
     def decrementOrder(self):
         """
         Update the bond as a result of applying a CHANGE_BOND action to
@@ -351,7 +351,7 @@ class Bond(Edge):
         elif self.order == 'T': self.order = 'D'
         else:
             print 'Error'
-        
+
     def __changeBond(self, order):
         """
         Update the bond as a result of applying a CHANGE_BOND action,
@@ -404,8 +404,8 @@ class Molecule(Graph):
         self.properties = dict()
         if SMILES != '': self.fromSMILES(SMILES, implicitH)
         elif InChI != '': self.fromInChI(InChI, implicitH)
-        
-    
+
+
     def __str__(self):
         """
         Return a human-readable string representation of the object.
@@ -431,7 +431,7 @@ class Molecule(Graph):
         Add an `atom` to the graph. The atom is initialized with no bonds.
         """
         return self.addVertex(atom)
-    
+
     def addBond(self, atom1, atom2, bond):
         """
         Add a `bond` to the graph as an edge connecting the two atoms `atom1`
@@ -547,7 +547,7 @@ class Molecule(Graph):
         else:
             # No heavy atoms, so leave explicit
             return
-        
+
         # Count the hydrogen atoms on each non-hydrogen atom and set the
         # `implicitHydrogens` attribute accordingly
         hydrogens = []
@@ -667,7 +667,7 @@ class Molecule(Graph):
         mol = pybel.readstring('smiles', smilesstr)
         self.fromOBMol(mol.OBMol, implicitH)
         return self
-        
+
     def fromFile(self, fname='', ftype='g03', calctype='opt', implicitH=False):
         """
         Convert a SMILES string `smilesstr` to a molecular structure. Uses
@@ -713,8 +713,8 @@ class Molecule(Graph):
             # Use atomic number as key for element
             number = obatom.GetAtomicNum()
             element = elements.getElement(number=number)
-            
-            
+
+
             # Process spin multiplicity
             radicalElectrons = 0
             spinMultiplicity = obatom.GetSpinMultiplicity()
@@ -731,12 +731,12 @@ class Molecule(Graph):
             charge = obatom.GetFormalCharge()
             coord = np.array([obatom.x(), obatom.y(), obatom.z()])
             label = obatom.GetIdx()
-            
+
             atom = Atom(element, coord, radicalElectrons, spinMultiplicity, 0, charge, str(label))
             self.vertices.append(atom)
             self.edges[atom] = {}
-            
-            
+
+
             # Add bonds by iterating again through atoms
             for j in range(0, i):
                 obatom2 = obmol.GetAtom(j + 1)
@@ -792,7 +792,7 @@ class Molecule(Graph):
         import pybel
         mol = pybel.Molecule(self.toOBMol())
         return mol.write('smiles').strip()
-        
+
     def toFile(self, ftype):
         """
         Convert a molecular structure to an SMILES string. Uses
@@ -809,7 +809,7 @@ class Molecule(Graph):
         """
 
         import openbabel
-        
+
         # Make hydrogens explicit while we perform the conversion
         implicitH = self.implicitHydrogens
         self.makeHydrogensExplicit()
@@ -861,20 +861,20 @@ class Molecule(Graph):
             """Display float lists as one line in json. Useful for vectors."""
             json_string = json_string.split("\n")
             for i, row in enumerate(json_string):
-        
+
                 # Iterate through all rows that start a list
                 if row[-1] != "[" or not has_next_float(json_string, i):
                     continue
-        
+
                 # Move down rows until the list ends, deleting and appending.
                 while has_next_float(json_string, i):
                     row += " " + json_string[i + 1].strip()
                     del json_string[i + 1]
-        
+
                 # Finish off with the closing bracket
                 json_string[i] = row + " " + json_string[i + 1].strip()
                 del json_string[i + 1]
-        
+
             # Recombine the list into a string and return
             return "\n".join(json_string)
 
@@ -885,25 +885,25 @@ class Molecule(Graph):
                 return True
             except:
                 return False
-                
+
         # Get centroid to center molecule at (0, 0, 0)
         centroid = [0, 0, 0]
         for atom in self.atoms:
             centroid = [c + a for c, a in zip(centroid, atom.coord)]
         centroid = [c / float(len(self.atoms)) for c in centroid]
-    
+
         # Openbabel atom types have valence ints. Remove those.
         # There are other flags on common atoms (aromatic, .co, am, etc.)
         parse_type = lambda t: t[0] if len(t) > 2 else re.sub("(\d|\W)", "", t)
-    
+
         # Save atom element type and 3D location.
         atoms = [{"element": atom.element.symbol,
                   "location": [a - c for a, c in zip(atom.coord, centroid)]}
                  for atom in self.atoms]
-    
+
         # Save number of bonds and indices of endpoint atoms
         # Switch from 1-index to 0-index counting
-        bonds = list()    
+        bonds = list()
         for x in self.bonds.iteritems():
             for y in x[1].iteritems():
                 bonds.append({'source': int(x[0].label)-1, 'target': int(y[0].label)-1, 'order': y[1].order})
@@ -919,31 +919,31 @@ class Molecule(Graph):
             b1 = self.atoms[atoms[1]].coord - self.atoms[atoms[0]].coord
             b2 = self.atoms[atoms[1]].coord - self.atoms[atoms[2]].coord
             b3 = self.atoms[atoms[3]].coord - self.atoms[atoms[2]].coord
-            
+
             n1 = np.cross(b1, b2) / np.linalg.norm(np.cross(b1, b2))
             n2 = np.cross(b2, b3) / np.linalg.norm(np.cross(b2, b3))
-            
+
             n_b2 = b2 / np.linalg.norm(b2)
             m1 = np.cross(n1, n_b2)
-            
+
             x = np.dot(n1, n2)
             y = np.dot(m1, n2)
-            
+
             rad = np.arctan2(y,x)
             grad = rad * 180.0 / np.pi
-            
+
             return grad, rad
-            
+
     def getAngle(self, atoms=[]):
         if len(atoms) == 3:
             atoms = np.array(atoms)
             atoms = atoms - 1
-            
+
             b1 = self.atoms[atoms[0]].coord - self.atoms[atoms[1]].coord
             b2 = self.atoms[atoms[2]].coord - self.atoms[atoms[1]].coord
 
             rad = np.arccos(np.dot(b1, b2)/(np.linalg.norm(b1)*np.linalg.norm(b2)))
-            
+
             grad = rad * 180.0 / np.pi
             return grad, rad
 
@@ -951,13 +951,13 @@ class Molecule(Graph):
         if len(atoms) == 2:
             atoms = np.array(atoms)
             atoms = atoms - 1
-            
+
             b1 = self.atoms[atoms[0]].coord - self.atoms[atoms[1]].coord
-            
+
             return np.linalg.norm(b1)
 
 
-    
+
     def getCenterOfMass(self, atoms=[]):
         """
         Calculate and return the [three-dimensional] position of the center of
@@ -965,11 +965,11 @@ class Molecule(Graph):
         only those atoms will be used to calculate the center of mass.
         Otherwise, all atoms will be used.
         """
-        
+
         atoms = np.array(atoms)
         center = np.zeros(3, np.float64); mass = 0.0
         if len(atoms) == 0:
-            atoms = np.arange(0, len(self.atoms), 1)    
+            atoms = np.arange(0, len(self.atoms), 1)
         else:
             atoms = atoms - 1
 
@@ -977,9 +977,9 @@ class Molecule(Graph):
             center += self.atoms[i].realMass * self.atoms[i].coord
             mass += self.atoms[i].realMass
         center /= mass
-            
+
         return center
-        
+
     def moveToCenterOfMass(self):
         center = self.getCenterOfMass()
         for atom in self.atoms:
@@ -998,7 +998,7 @@ class Molecule(Graph):
             atoms = np.arange(0, len(self.atoms), 1)
         else:
             atoms = atoms - 1
-            
+
         for i in atoms:
             mass = self.atoms[i].realMass * constants.u
             coord = self.atoms[i].coord - centerOfMass
@@ -1012,9 +1012,9 @@ class Molecule(Graph):
         I[1,0] = I[0,1]
         I[2,0] = I[0,2]
         I[2,1] = I[1,2]
-    
+
         return I
-    
+
     def getPrincipalMomentsOfInertia(self, atoms=[]):
         """
         Calculate and return the principal moments of inertia and corresponding
@@ -1035,7 +1035,7 @@ class Molecule(Graph):
         I, V = self.getPrincipalMomentsOfInertia(atoms)
         rot = constants.h/(8.0*np.pi**2.0*I)
         return rot
-        
+
     def rotateToPrincipleAxisSystem(self):
         self.moveToCenterOfMass()
         I, V = self.getPrincipalMomentsOfInertia()
@@ -1055,13 +1055,13 @@ class Molecule(Graph):
 
         R_z[0,0] = np.cos(gamma/180.*np.pi); R_z[1,1] = np.cos(gamma/180.*np.pi); R_z[2,2] = 1.
         R_z[0,1] = -np.sin(gamma/180.*np.pi); R_z[1,0] = np.sin(gamma/180.*np.pi)
-        
+
         R = np.dot(R_x,R_y)
         R = np.dot(R, R_z)
 
         for atom in self.atoms:
             atom.coord = np.dot(R, atom.coord)
-        
+
 
     def mirrorMolecule(self, plane='yz'):
         for atom in self.atoms:
@@ -1076,7 +1076,7 @@ class Molecule(Graph):
                 atom.coord[1] = -atom.coord[1]
                 atom.coord[2] = -atom.coord[2]
 
-        
+
     def rotateMoleculeAroundBond(self, bond, alpha=0.0):
         self.moveToCenterOfMass()
         # TODO
@@ -1084,49 +1084,49 @@ class Molecule(Graph):
     def rotateTopAroundBond(self, bond, alpha=0.0):
         self.moveToCenterOfMass()
         # TODO
-        
+
     def getBondOrientation(self, atom1, atom2):
-        lam = np.zeros(3); vec = np.zeros(3)   
+        lam = np.zeros(3); vec = np.zeros(3)
         self.rotateToPrincipleAxisSystem()
         if np.linalg.norm(self.atoms[atom1].coord) > np.linalg.norm(self.atoms[atom2].coord):
             vec = self.atoms[atom1].coord - self.atoms[atom2].coord
         else:
             vec = self.atoms[atom2].coord - self.atoms[atom1].coord
-            
+
         lam = vec/np.linalg.norm(vec)
-        
-        return lam, vec        
+
+        return lam, vec
 
     def getTopOrientation(self, conAtom=1, topAtoms=[]):
         conAtom -= 1
-        lam = np.zeros(3); vec = np.zeros(3)   
+        lam = np.zeros(3); vec = np.zeros(3)
         self.rotateToPrincipleAxisSystem()
         centerOfMass = self.getCenterOfMass(topAtoms)
-        norm = np.linalg.norm(self.atoms[conAtom].coord - centerOfMass)        
-        
+        norm = np.linalg.norm(self.atoms[conAtom].coord - centerOfMass)
+
         for i in np.arange(0,3,1):
             vec[i] = centerOfMass[i] - self.atoms[conAtom].coord[i]
         lam = vec / norm
-        
+
         return lam, vec
-                
+
     def getIntRotParams(self, conAtom=1, onAxisAtom=1, offAxisAtoms=[], rep='prolate', cof='yes'):
-        
+
         orientation = dict()
         rho = np.zeros(3)
         self.rotateToPrincipleAxisSystem()
-        
+
         I_alpha, V = self.getPrincipalMomentsOfInertia(np.append(offAxisAtoms, onAxisAtom))
         rot_alpha = self.getRotationalConstants(np.append(offAxisAtoms, onAxisAtom))
         I_alpha = I_alpha[2]; rot_alpha = rot_alpha[2]
-        
+
         I, V = self.getPrincipalMomentsOfInertia()
         if cof == 'yes':
             lam, vec = self.getTopOrientation(conAtom, np.append(offAxisAtoms, onAxisAtom))
         else:
             lam, vec = self.getBondOrientation(conAtom-1, onAxisAtom-1)
         rot = self.getRotationalConstants()
-        
+
         for i in np.arange(0,3,1):
             rho[i] = lam[i]*I_alpha/I[i]
         if rep == 'prolate':
@@ -1137,7 +1137,7 @@ class Molecule(Graph):
             x = 1
             y = 0
             z = 2
-            
+
         orientation['gamma'] = [np.arccos(rho[x] / np.sqrt(rho[x]**2 + rho[y]**2))]
         orientation['gamma'].append(orientation['gamma'][0]*180/np.pi)
         orientation['beta'] = [np.arccos(rho[z] / np.linalg.norm(rho))]
@@ -1158,13 +1158,13 @@ class Molecule(Graph):
         orientation['norm_rho'] = np.linalg.norm(rho)
         orientation['r'] = 1. - lam[y]**2*I_alpha/I[y] - lam[z]**2*I_alpha/I[z]
         orientation['F'] = constants.h/(8*np.pi**2*orientation['r']*I_alpha)
-        
+
         conAtom -= 1
-        
+
         return orientation
-        
+
     def getIsotopologues(self, rot_meas=np.array([])):
-        
+
         rot_diff = dict()
         rot_shifted = dict()
         rot_iso = dict()
@@ -1181,5 +1181,5 @@ class Molecule(Graph):
                         if len(rot_meas > 0):
                             rot_shifted[str(j.symbol) + str(j.label) + '_{0:.2f}'.format(k)] = self.getRotationalConstants() - rot_normal + rot_meas
                         j.realMass = j.element.mass
-                        
+
         return rot_iso, rot_diff, rot_shifted
