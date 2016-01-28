@@ -176,7 +176,9 @@ class Autofit:
                     ind_p = np.append(ind_p, h_)
             i+=1
 
-        return ind_p, ind_l, qn
+        omc = np.sqrt(np.sum((lines[ind_l] - peaks[ind_p][:,0]) ** 2.))
+
+        return ind_p, ind_l, qn, omc
 
     def load_peaks(self, peaks):
         if type(peaks) == list or type(peaks) == np.ndarray:
@@ -501,12 +503,12 @@ class Autofit:
 
                 err = fit.fit_content['err_mw_rms']
 
-                ind_p, ind_l, qn_ = self.assign(A, B, C)
+                ind_p, ind_l, qn_, omc = self.assign(A, B, C)
                 N = len(ind_p)
 
                 if len(ind_p) >= self.params['min_N_lines']:
 
-                    h = np.array([A, B, C, N, err])
+                    h = np.array([A, B, C, N, omc])
                     result = h if len(result) == 0 else np.vstack((result, h))
 
         self.result = result[np.argsort(result[:,3])][::-1]
@@ -515,7 +517,7 @@ class Autofit:
 
     def write_report(self):
         fname = self.report + '_result.txt'
-        if len(self.result) > 0:
+        if len(self.result):
             fmt = ('%.2f', '%.2f', '%.2f', '%d','%.2e')
             np.savetxt(fname, self.result, fmt=fmt)
 
@@ -529,15 +531,15 @@ class Autofit:
 
         if fit.fit_content['err_mw_rms'] >= 0 and fit.fit_content['err_mw_rms'] < .1:
             rot = fit.var_fitpar['par']
-            ind_p, ind_l, qn_ = self.assign(rot[0], rot[1], rot[2])
+            ind_p, ind_l, qn_, omc_ = self.assign(rot[0], rot[1], rot[2])
             A = fit.var_fitpar['par'][0]; B = fit.var_fitpar['par'][1]
             C = fit.var_fitpar['par'][2];
             fitted = fit.fit_content['N_fitted_lines']
 
-            return A, B, C, ind_p, ind_l, qn_, fitted, True
+            return A, B, C, ind_p, ind_l, qn_, fitted, omc_, True
 
         else:
-            return A, B, C, -1, -1, -1, -1, False
+            return A, B, C, [-1], [-1], [-1], -1, -1, False
 
     def create_random_seed(self, A, B, C, delta, N):
 
@@ -587,13 +589,16 @@ class Autofit:
                 else:
                     result = h
 
-            self.result = result[np.argsort(result[:,3])][::-1]
-            return self.result
+            if len(result):
+                self.result = result[np.argsort(result[:,3])][::-1]
+                return self.result
+            else:
+                return np.array([])
 
         else:
             return np.array([])
 
-    def refine_result(self, n = 1000, err=.0, limit=0.03):
+    def refine_result(self, n = 1000, err=.0, limit=0.05):
         #TODO: Add progress bar
         if len(self.result) > 0:
             if err == .0:
@@ -602,19 +607,23 @@ class Autofit:
             result = np.array([])
 
             for x in self.result[:n]:
-                ind_p, ind_l, qn_ = self.assign(x[0], x[1], x[2])
-                check = True; A_ = x[0]; B_ = x[1]; C_ = x[2]
+                ind_p, ind_l, qn_, omc_ = self.assign(x[0], x[1], x[2])
+                check = True; A_ = x[0]; B_ = x[1]; C_ = x[2]; N_=len(ind_p)
 
                 while len(ind_p) >= self.params['min_N_lines'] and err > limit and check:
                     peaks_h = self.peaks['all'][ind_p][:,0]
                     qn_h = spfit.convert_qn_cat_lin(qn_[ind_l])
-                    A_, B_, C_, ind_p, ind_l, qn_, N_, check = self.refit(A_, B_, C_, err, peaks_h, qn_h)
+                    A_, B_, C_, ind_p, ind_l, qn_, N_, omc_, check = self.refit(A_, B_, C_, err, peaks_h, qn_h)
                     err /= 2.
 
-                h = np.array([A_, B_, C_, N_, err*2.])
+                h = np.array([A_, B_, C_, N_, omc_])
                 result = h if len(result) == 0 else np.vstack((result, h))
 
-            return result[np.argsort(result[:,3])][::-1]
+            h = cp.deepcopy(self)
+
+            h.result = result[np.argsort(result[:,3])][::-1]
+
+            return h
 
     def plot_result(self, n=1000, dim=.0):
 
@@ -688,6 +697,7 @@ class Autofit:
 
             task.report = task.prefix
             task.run_autofit(verbose=False)
+
             task.write_report()
             task.del_files()
 
@@ -695,12 +705,12 @@ class Autofit:
 
         check = list([])
         for i in range(N):
-            p = multiprocessing.Process(target=run_parallel, args=(self.prefix,i))
+            p = multiprocessing.Process(target=run_parallel, args=(self.prefix, i))
             p.start()
             check.append(p)
 
-        for i in range(N):
-            check[i].join()
+        for job in check:
+            job.join()
 
         self.read_result()
         self.del_files(del_all=True)
@@ -714,10 +724,90 @@ class Autofit:
 
         return self.params['N_triples_total']
 
+    def plot_comparison(self, n=0, spec=np.array([]), scale=1.):
+        import matplotlib.pyplot as plt
+
+        if type(n) == int:
+            n = list([n])
+
+        if len(self.result) and len(spec):
+            cutoff = self.params['cutoff']
+
+            fig, ax = plt.subplots()
+
+            line = ax.plot(spec[:,0], spec[:,1] * scale, rasterized=True, color='k')
+
+            colors = list(['b', 'g', 'r', 'c', 'm', 'y', 'k'])
+
+            k = 0
+            for i in n[:7]:
+
+                A = self.result[i][0]; B = self.result[i][1]
+                C = self.result[i][2]
+
+                ind_p, ind_l, qn, omc = self.assign(A, B, C)
+
+                pred = spfit.spfitAsym(fname = self.prefix + '_a', A=A, B=B, C=C)
+                pred.read_var()
+                pred.read_int()
+                pred.read_cat()
+
+                if cutoff < 0:
+                    lines = np.where(pred.cat_content['lgint'] > cutoff)[0]
+
+                else:
+                    h = pred.cat_content['lgint'][np.argsort(pred.cat_content['lgint'])][-cutoff:]
+                    lines = np.where(pred.cat_content['lgint'] > min(h))[0]
+
+                lines = pred.cat_content['freq'][lines]
+
+                pred.make_spec_cat()
+
+                ax.plot(pred.pred_spec['spec'][:,0], pred.pred_spec['spec'][:,1]*-1.,
+                    color=colors[k], label=str(i))
+
+                for j in range(len(ind_p)):
+                    h = np.array([self.peaks['all'][ind_p[j]][0], lines[ind_l[j]]])
+                    ax.plot(h, np.zeros(2), 'o-', color=colors[k])
+
+                k += 1
+
+            ax.set_xlabel('frequency (MHz)')
+            ax.set_ylabel('intensity (arb. units)')
+            ax.legend()
+
+    def export_spfit_files(self, n=0, name=''):
+        if name == '':
+            name = self.prefix + '_export'
+
+        if len(self.result) > 0:
+
+            A = self.result[n][0]; B = self.result[n][1]
+            C = self.result[n][2]
+
+            dipA = self.pred['dipA']; dipB = self.pred['dipB']
+            dipC = self.pred['dipC']
+
+            ind_p, ind_l, qn_, omc_ = self.assign(A, B, C)
+
+            peaks = self.peaks['all'][ind_p][:,0]
+            qn = spfit.convert_qn_cat_lin(qn_[ind_l])
+
+            expt = spfit.spfitAsym(fname=name, A=A, B=B, C=C, dipA=dipA,
+                dipB=dipB, dipC=dipC)
+            expt.lin_content['freq'] = peaks
+            expt.lin_content['qn'] = qn
+            expt.par_params['errtst'] = self.params['bw']/0.02
+
+            expt.write_var()
+            expt.write_par()
+            expt.write_lin()
+            expt.write_int()
+
 ################################################################################
 
 class AutofitGWDG(Autofit):
-    def run_autofit(self, triples=-1):
+    def run_autofit(self, triples=-1, verbose=False):
         if triples == -1:
             triples = self.triples
 
@@ -746,12 +836,12 @@ class AutofitGWDG(Autofit):
 
                 err = fit.fit_content['err_mw_rms']
 
-                ind_p, ind_l, qn_ = self.assign(A, B, C)
+                ind_p, ind_l, qn_, omc = self.assign(A, B, C)
                 N = len(ind_p)
 
                 if len(ind_p) >= self.params['min_N_lines']:
 
-                    h = np.array([A, B, C, N, err])
+                    h = np.array([A, B, C, N, omc])
                     result = h if len(result) == 0 else np.vstack((result, h))
 
         self.result = result[np.argsort(result[:,3])][::-1]

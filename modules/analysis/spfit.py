@@ -1249,6 +1249,7 @@ class spfitPrediction:
         -----
         none
         '''
+        #TODO: FIX return ax and fig
 
         import matplotlib.pyplot as plt
 
@@ -1256,7 +1257,8 @@ class spfitPrediction:
             if len(self.pred_spec['spec']) > 0:
                 plt.ion()
                 fig, ax = plt.subplots()
-		flag = 0
+                flag = 0
+
                 if tr_type == 'all':
                     w = self.pred_spec['linelist']
                     v = self.pred_spec['qn']
