@@ -515,6 +515,48 @@ class Autofit:
 
         return self.result
 
+    def run_autofit_GWDG(self, triples=-1, verbose=False):
+        if triples == -1:
+            triples = self.triples
+
+        else:
+            self.triples = triples
+
+        p0 = self.peaks['0'][:,0]; p1 = self.peaks['1'][:,0];
+        p2 = self.peaks['2'][:,0]
+
+        qn = self.fit_qn['lin']
+        A = self.pred['A']; B = self.pred['B']; C = self.pred['C']
+        result = np.array([])
+
+        for x in triples:
+            fit = spfit.spfitAsym(fname = self.prefix + '_f', A=A, B=B, C=C)
+            fit.lin_content['freq'] = np.array([p0[x[0]], p1[x[1]], p2[x[2]]])
+            fit.lin_content['qn'] = qn
+            fit.par_params['errtst'] = 1000/0.02
+
+            fit.fit_min()
+
+            if fit.fit_content['err_mw_rms'] >= 0. and fit.fit_content['err_mw_rms'] < .1 and fit.fit_content['reject'] == False and fit.fit_content['err_new_rms'] < 1.:
+
+                A = fit.par_fitpar['par'][0]; B = fit.par_fitpar['par'][1]
+                C = fit.par_fitpar['par'][2]
+
+                err = fit.fit_content['err_mw_rms']
+
+                ind_p, ind_l, qn_, omc = self.assign(A, B, C)
+                N = len(ind_p)
+
+                if len(ind_p) >= self.params['min_N_lines']:
+
+                    h = np.array([A, B, C, N, omc])
+                    result = h if len(result) == 0 else np.vstack((result, h))
+
+        self.result = result[np.argsort(result[:,3])][::-1]
+
+        return self.result
+
+
     def write_report(self):
         fname = self.report + '_result.txt'
         if len(self.result):
@@ -803,56 +845,6 @@ class Autofit:
             expt.write_par()
             expt.write_lin()
             expt.write_int()
-
-################################################################################
-
-class AutofitGWDG(Autofit):
-    def run_autofit(self, triples=-1, verbose=False):
-        if triples == -1:
-            triples = self.triples
-
-        else:
-            self.triples = triples
-
-        p0 = self.peaks['0'][:,0]; p1 = self.peaks['1'][:,0];
-        p2 = self.peaks['2'][:,0]
-
-        qn = self.fit_qn['lin']
-        A = self.pred['A']; B = self.pred['B']; C = self.pred['C']
-        result = np.array([])
-
-        for x in triples:
-            fit = spfit.spfitAsym(fname = self.prefix + '_f', A=A, B=B, C=C)
-            fit.lin_content['freq'] = np.array([p0[x[0]], p1[x[1]], p2[x[2]]])
-            fit.lin_content['qn'] = qn
-            fit.par_params['errtst'] = 1000/0.02
-
-            fit.fit_min()
-
-            if fit.fit_content['err_mw_rms'] >= 0. and fit.fit_content['err_mw_rms'] < .1 and fit.fit_content['reject'] == False and fit.fit_content['err_new_rms'] < 1.:
-
-                A = fit.par_fitpar['par'][0]; B = fit.par_fitpar['par'][1]
-                C = fit.par_fitpar['par'][2]
-
-                err = fit.fit_content['err_mw_rms']
-
-                ind_p, ind_l, qn_, omc = self.assign(A, B, C)
-                N = len(ind_p)
-
-                if len(ind_p) >= self.params['min_N_lines']:
-
-                    h = np.array([A, B, C, N, omc])
-                    result = h if len(result) == 0 else np.vstack((result, h))
-
-        self.result = result[np.argsort(result[:,3])][::-1]
-
-        return self.result
-
-    def write_report(self):
-        fname = self.report + '_result.txt'
-        if len(self.result) > 0:
-            fmt = ('%.2f', '%.2f', '%.2f', '%d','%.2e')
-            np.savetxt(fname, self.result, fmt=fmt)
 
 ################################################################################
 

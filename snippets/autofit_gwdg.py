@@ -12,6 +12,6 @@ task = afit.load_task(fname, N)[0][0]
 task.report = task.prefix
 task.prefix = scratch + '/' + task.prefix
 
-task.run_autofit()
+task.run_autofit_GWDG()
 task.write_report()
 task.del_files()
