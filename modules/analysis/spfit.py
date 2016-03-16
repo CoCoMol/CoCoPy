@@ -1154,13 +1154,13 @@ class spfitPrediction:
 
         Parameters
         ----------
-        spectrum (float): 2 column array, frequencies in the first column and
-        intensities in the second column
+        spectrum (np.array (2D), float): 2 column array with frequencies in the
+            first column and intensities in the second column
 
         Returns
         -------
-        freq (float): list of the refined frequencies
-        intens ( float): list of the intensities
+        freq (list, float): list of the refined frequencies
+        intens (list, float): list of the intensities
 
         Notes
         -----

@@ -39,6 +39,7 @@ import os
 '''
 Todo:
     1. Comment all
+    2. module load
 '''
 
 class Autofit:
@@ -47,6 +48,26 @@ class Autofit:
         dip=[1., 1., 1.], temp=.3, min_f=2500., max_f=7000.):
         '''
         This class tries to cover everything, which is related to Autofit.
+
+        Parameters
+        ----------
+        prefix (str): Prefix for all temporary filenames ('test')
+        rot (float, list): list of the ab-initio, guessed rotational constants
+            ([3000., 1500., 1000])
+        dip (float, list): list of the ab-initio, guessed dipole moment
+            components ([1., 1., 1.])
+        temp (float): temperature of the prediction
+        min_f (float): minimum frequency of the initial prediction (2500.)
+        max_f (float): maximum frequency of the initial prediction (7000.)
+
+        Returns
+        -------
+        Autofit instance
+
+        Notes
+        -----
+        Make min_f slightly larger and max_f slightly smaller than your measured
+        spectrum.
         '''
 
         self.pred = {
@@ -97,7 +118,7 @@ class Autofit:
 
         self.params = {
             'min_N_lines': 7, 'bw': .25, 'cutoff': 50, 'start': -1, 'stop': -1,
-            'itera': -1, 'delta_rot': 50, 'delta_freq': 100, 'seed': 1000,
+            'stepsize': -1, 'delta_rot': 50, 'delta_freq': 100, 'seed': 1000,
             'N_triples': 0, 'N_triples_total': 0
             }
 
@@ -111,6 +132,22 @@ class Autofit:
         self.make_pred()
 
     def make_pred(self):
+        '''
+        Make a prediction based on the paramters in self.pred
+
+        Parameters
+        ----------
+        none
+
+        Returns
+        -------
+        none
+
+        Notes
+        -----
+        none
+        '''
+
         pred = spfit.spfitAsym(fname=self.prefix+'_p', A=self.pred['A'], B=self.pred['B'], C=self.pred['C'])
 
         pred.int_dipole['dipole'] = np.array([self.pred['dipA'], self.pred['dipB'], self.pred['dipC']])
@@ -120,7 +157,6 @@ class Autofit:
         pred.cat_min()
 
         i_min = min(np.where(pred.cat_content['freq'] > self.pred['min_f'])[0])
-        #i_max = min(np.where(pred.cat_content['freq'] > self.pred['max_f'])[0])
 
         p_freq = pred.cat_content['freq'][i_min:]
         p_qn = pred.cat_content['qn'][i_min:]
@@ -131,7 +167,63 @@ class Autofit:
         self.pred['intens'] = p_int[np.argsort(p_int)][::-1]
 
 
-    def assign(self, A, B, C, bw=0):
+    def print_pred(self):
+        '''
+        Printout of the predicted transition based on a prediction made with
+        self.make_pred(). The lines are sorted by increasing intensity.
+
+        Parameters
+        ----------
+        none
+
+        Returns
+        -------
+        none
+
+        Notes
+        -----
+        none
+        '''
+
+        if len(self.pred['qn']):
+            i = 0
+            print 'N\tfreq\t qn\t\t\t\tintensity\n\n'
+            for qn in self.pred['qn']:
+                h = '{}\t{:2.2f}\t{}\t{:2.2f}'.format(i, self.pred['freq'][i], qn, self.pred['intens'][i])
+                h += '\n' + ((len(h)+13) * '-')
+
+                print h
+                i += 1
+
+
+    def assign(self, A, B, C, bw=0.):
+        '''
+        Assigns the predicted lines (based on a prediction using the rotational
+        constants A, B, C) to the closest measured transition that is within a
+        bandwidth bw. No intensity scoring is applied. The dipole moment
+        components and the temperature stored in self.pred are used.
+
+        Parameters
+        ----------
+        A (float): rotational constant A
+        B (float): rotational constant B
+        C (float): rotational constant B
+        bw (float): bandwidth for the assignment (0.)
+
+        Returns
+        -------
+        ind_p (list, int): indices of the assigned peaks taken from
+            self.peaks['all']
+        freq: (list, float): frequencies of the assigned predicted transitions
+        qn: (list, str): quantum numbers for the assigned transitions (in 'cat'
+            notation
+        omc: (float): observed-minus.calculated value for this specific
+            prediction
+
+        Notes
+        -----
+        none
+        '''
 
         dipA = self.pred['dipA']; dipB = self.pred['dipB']
         dipC = self.pred['dipC']; temp = self.pred['temp']
@@ -145,14 +237,14 @@ class Autofit:
         pred.cat_min()
 
         if cutoff < 0:
-            lines = np.where(pred.cat_content['lgint'] > cutoff)[0]
+            h = np.where(pred.cat_content['lgint'] > cutoff)[0]
 
         else:
             h = pred.cat_content['lgint'][np.argsort(pred.cat_content['lgint'])][-cutoff:]
-            lines = np.where(pred.cat_content['lgint'] > min(h))[0]
+            h = np.where(pred.cat_content['lgint'] > min(h))[0]
 
-        qn = pred.cat_content['qn'][lines]
-        lines = pred.cat_content['freq'][lines]
+        qn = pred.cat_content['qn'][h]
+        lines = pred.cat_content['freq'][h]
 
         ind_l = np.array([], dtype=int)
         ind_p = np.array([], dtype=int)
@@ -178,14 +270,47 @@ class Autofit:
 
         omc = np.sqrt(np.sum((lines[ind_l] - peaks[ind_p][:,0]) ** 2.))
 
-        return ind_p, ind_l, qn, omc
+        return ind_p, lines[ind_l], qn[ind_l], omc
+
 
     def load_peaks(self, peaks):
+        '''
+        Load the peaks to the Autofit instance.
+
+        Parameters
+        ----------
+        peaks (np.array (1D or 2D), float): Peaklist as a np.array with or
+            without intensities
+
+        Returns
+        -------
+        none
+
+        Notes
+        -----
+        none
+        '''
+
         if type(peaks) == list or type(peaks) == np.ndarray:
             self.peaks['all'] = spfit.reshape_linelist(peaks)
 
 
     def lin_dep_debug(self, qn):
+        '''
+        Debugging function
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
 
         freq = self.pred['freq']
         A = self.pred['A']; B = self.pred['B']; C = self.pred['C']
@@ -226,11 +351,35 @@ class Autofit:
 
         return result
 
+
     def lin_dependence(self, N=10, max_K=2, diff_J=False, diff_tt=False):
         '''
-        TODO: Implement max_K
-        TODO: Implement diff_J
-        TODO: Implement diff_tt
+        Checks the linear dependency of all possible combination of some
+        transitions. You can define the different transitions to be used by
+        using a list for N or you can just use the N highest intensity
+        transitions (N single integer value).
+
+        Parameters
+        ----------
+        N (int or list): if N is a single integer value, the N highest intensity
+            transitions are used, if N is a list then these transitions are used
+            self.pred['qn'][N] (10)
+        max_K (int): use a transition with a K value of max_K (not yet
+            implemented)
+        diff_J (bool): use transitions with different J values (not yet
+            implemented)
+        diff_tt (bool): use different transition types (not yet implemented)
+
+        Returns
+        -------
+        return self.fit_qn (dict): dictionary of the quantum numbers of the
+            triple with the best linear independency, this triple will be used
+            for the autofit routine if you do not change it with
+            self.choose_qn()
+
+        Notes
+        -----
+        none
         '''
 
         qn = self.pred['qn']; freq = self.pred['freq']
@@ -270,10 +419,57 @@ class Autofit:
 
         return self.fit_qn
 
-    def choose_qn(self, n):
-        h = spfit.standard_qn(self.pos_qn['qn'][n])
+    def print_qn(self):
+        '''
+        Print out of the linear dependency scoring for different triples. This
+        function might be used before choosing a triple using self.choose_qn().
+
+        Parameters
+        ----------
+        none
+
+        Returns
+        -------
+        none
+
+        Notes
+        -----
+        none
+        '''
+
+        if len(self.pos_qn['qn']):
+            i = 0
+            print 'N\tscore\t qn_0\t\t\t\t qn_1\t\t\t\t qn_2\n\n'
+            for qn in self.pos_qn['qn']:
+                h = '{}\t{:2.2f}\t{}\t{}\t{}'.format(i, self.pos_qn['score'][i], qn[0], qn[1], qn[2])
+                h += '\n' + ((len(h)+16) * '-')
+
+                print h
+                i += 1
+
+
+    def choose_qn(self, N):
+        '''
+        Defines the triple that should be used by autofit. Run
+        self.lin_dependence() beforehand and have a look at the results using
+        self.print_qn().
+
+        Parameters
+        ----------
+        N (int): indice if the triple to be used defined in self.pos_qn['qn']
+
+        Returns
+        -------
+        none
+
+        Notes
+        -----
+        none
+        '''
+
+        h = spfit.standard_qn(self.pos_qn['qn'][N])
         self.fit_qn['lin'] = spfit.convert_qn_lin(h)
-        self.fit_qn['cat'] = self.pos_qn['qn'][n]
+        self.fit_qn['cat'] = self.pos_qn['qn'][N]
 
         for i in range(3):
             self.fit_qn[str(i)] = h[i]
@@ -284,43 +480,34 @@ class Autofit:
 
         self.fit_qn['freq'] = freq
 
-    def print_qn(self):
-        if len(self.pos_qn['qn']) > 0:
-            i = 0
-            print 'N\tscore\t qn_0\t\t\t\t qn_1\t\t\t\t qn_2\n\n'
-            for qn in self.pos_qn['qn']:
-                h = '{}\t{:2.2f}\t{}\t{}\t{}'.format(i, self.pos_qn['score'][i], qn[0], qn[1], qn[2])
-                h += '\n' + ((len(h)+16) * '-')
 
-                print h
-                i += 1
+    def det_limits_rot(self, delta_rot=0., seed=0):
+        '''
+        Determines the limits for the bandwidths of the three different
+        transitions of the triple based on a bandwidth for the three rotational
+        constants.
 
-    def print_pred(self):
-        if len(self.pred['qn']) > 0:
-            i = 0
-            print 'N\tfreq\t qn\t\t\t\tintensity\n\n'
-            for qn in self.pred['qn']:
-                h = '{}\t{:2.2f}\t{}\t{:2.2f}'.format(i, self.pred['freq'][i], qn, self.pred['intens'][i])
-                h += '\n' + ((len(h)+13) * '-')
+        Parameters
+        ----------
+        delta_rot (float or list, float): bandwidth of the rotational constant,
+            if delta_rot is a single float value the same bandwidth is assumed
+            for all rotational constants, you can also define a individual
+            bandwidths for the three rotational constants by using a list with
+            three entries, standard values are defined in self.params (0.)
+        seed (int): number of seed samples to evaluate the effect of the
+            different rotational on the triple transitions, the more samples you
+            use the more accurate is the determination of the bandwidth, 1000 is
+            maybe a good value, standard values are defined in self.params (0)
 
-                print h
-                i += 1
+        Returns
+        -------
+        freq_lim (np.array, float): frequency limits of the tree different
+            transitions of the triple as 2D np.array.
 
-
-    def det_qn(self, qn):
-        h = spfit.standard_qn(qn)
-        self.fit_qn['lin'] = spfit.convert_qn_lin(h)
-        self.fit_qn['cat'] = qn
-
-        for i in range(3):
-            self.fit_qn[str(i)] = h[i]
-
-        self.triples = np.array([])
-        self.triples_all = np.array([])
-
-
-
-    def det_limits_rot(self, delta_rot=0, seed=0):
+        Notes
+        -----
+        none
+        '''
 
         if delta_rot != 0:
             self.params['delta_rot'] = delta_rot
@@ -355,7 +542,30 @@ class Autofit:
         return freq_lim
 
 
-    def det_limits_spec(self, delta_freq=0):
+    def det_limits_spec(self, delta_freq=0.):
+        '''
+        Determines the limits for the bandwidths of the three different
+        transitions of the triple based on delta_freq and the predicted values
+        of the transitions of the triple.
+
+        Parameters
+        ----------
+        delta_freq (float or list, float): delta_freq determines the bandwidth
+            autofit looks for peaks to include into the routine, if a single
+            float is used for delta_freq the same bandwidth is applied for all
+            three transitions, you can also define a individual
+            bandwidths for the three transitions by using a list with three
+            entries, standard values are defined in self.params (0.)
+
+        Returns
+        -------
+        freq_lim (np.array, float): frequency limits of the tree different
+            transitions of the triple as 2D np.array.
+
+        Notes
+        -----
+        none
+        '''
 
         if delta_freq != 0:
             self.params['delta_freq'] = delta_freq
@@ -387,27 +597,77 @@ class Autofit:
 
     def det_peaks(self, intens=False):
         '''
-        TODO: sort by intensity
+        Determines the peaks that will be assigned to a transition of the triple
+        during the autofit routine. It is necessary to define the limits
+        beforehand by running self.det_limits_spec() or self.det_limits_rot() or
+        by defining the values manually in self.limits. The peaks are sorted by
+        their distance to the predicted frequency (based on ab-initio values).
+
+        Parameters
+        ----------
+        intens (bool): sort peaks by their intensity (not yet implemented)
+            (False)
+
+        Returns
+        -------
+        Number of peaks assigned to transition 1 (int)
+        Number of peaks assigned to transition 2 (int)
+        Number of peaks assigned to transition 3 (int)
+        Total number of possible triples (int)
+
+        Notes
+        -----
+        none
         '''
+
         def pick_peaks(peaks, f_min, f_max):
             h1 = np.where(peaks[:,0] > f_min)[0]
             h2 = np.where(peaks[:,0][h1] < f_max)[0]
 
             return peaks[h1][h2]
 
-        h = []
-        for x in self.limits:
-            h.append(pick_peaks(self.peaks['all'], x[0], x[1]))
+        if len(self.limits):
+            h = []
+            for x in self.limits:
+                h.append(pick_peaks(self.peaks['all'], x[0], x[1]))
 
-        for i in range(3):
-            self.peaks[str(i)] = h[i][np.argsort(abs(h[i][:,0] - self.pred['freq'][np.where(self.pred['qn'] == self.fit_qn['cat'][i])[0]]))]
+            for i in range(3):
+                self.peaks[str(i)] = h[i][np.argsort(abs(h[i][:,0] - self.pred['freq'][np.where(self.pred['qn'] == self.fit_qn['cat'][i])[0]]))]
 
-        self.params['N_triples_total'] = len(self.peaks['0']) * len(self.peaks['1']) * len(self.peaks['2'])
-        self.triples_all = np.array([])
+            self.params['N_triples_total'] = len(self.peaks['0']) * len(self.peaks['1']) * len(self.peaks['2'])
+            self.triples_all = np.array([])
 
-        return len(self.peaks['0']), len(self.peaks['1']), len(self.peaks['2']), self.params['N_triples_total']
+            return len(self.peaks['0']), len(self.peaks['1']), len(self.peaks['2']), self.params['N_triples_total']
 
-    def define_triples(self, start=-1, stop=-1, itera=-1):
+        else:
+            return 'Define frequency limits beforehand'
+
+
+    def define_triples(self, start=-1, stop=-1, stepsize=-1):
+        '''
+        Calculates and defines the triples. The triples are sorted by their sum,
+        so that the triples that are closest to the predicted values are
+        evaluated first. The number of triples that should be evaluated can be
+        limited by the start and stop values, that simply slice the array of all
+        triples (e.g. array[start:stop]). It is also possible to slice the array
+        such that it is stepped through using a certain stepsize
+        (e.g. array[start::stepsize]). If you would like to evaluate all triples
+        anyway then no further input is needed.
+
+        Parameters
+        ----------
+        start (int): start value for the triples (-1)
+        stop (int): stop value for the triples (-1)
+        stepsize (int): stepsize for slicing the triples array (-1)
+
+        Returns
+        -------
+        Number of triples (int)
+
+        Notes
+        -----
+        none
+        '''
 
         if stop < 0:
             if self.params['stop'] < 0:
@@ -427,11 +687,11 @@ class Autofit:
         else:
             self.params['start'] = start
 
-        if itera < 0:
-            if self.params['itera'] > 0:
-                itera = self.params['itera']
+        if stepsize < 0:
+            if self.params['stepsize'] > 0:
+                stepsize = self.params['stepsize']
         else:
-            self.params['itera'] = itera
+            self.params['stepsize'] = stepsize
 
         l0 = len(self.peaks['0'][:,0]); l1 = len(self.peaks['1'][:,0]);
         l2 = len(self.peaks['2'][:,0])
@@ -444,17 +704,39 @@ class Autofit:
         else:
             triples = self.triples_all
 
-        if itera < 0 and self.params['itera'] < 0:
+        if stepsize < 0 and self.params['stepsize'] < 0:
             triples = triples[start:stop]
         else:
-            triples = triples[start::itera]
+            triples = triples[start::stepsize]
 
         self.params['N_triples'] = len(triples)
         self.triples = triples
 
         return len(triples)
 
+
     def del_files(self, del_all=False):
+        '''
+        Delete all files in the current folder that start with the self.prefix
+        string. It is intended to delete all temporary spfit/spcat files, but it
+        will also delete all other files or folders starting with that specific
+        string (so use with care). If del_all is False then files with the
+        string result or *.pkl are not deleted.
+
+        Parameters
+        ----------
+        del_all (bool): if del_all is False then files with the string result
+            or *.pkl are not deleted.
+
+        Returns
+        -------
+        none
+
+        Notes
+        -----
+        none
+        '''
+
         import glob
         flist = glob.glob(self.prefix+'*')
         for x in flist:
@@ -463,7 +745,27 @@ class Autofit:
             elif 'result' not in x and '.pkl' not in x:
                 os.remove(x)
 
+
     def run_autofit(self, triples=-1, verbose=False):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        triples (list or np.array, int):
+        verbose (bool):
+
+        Returns
+        -------
+        the result array containing the rotational constants, the number of
+        assigned lines and the omc. It is sorted by the number of assigned
+        lines.
+
+        Notes
+        -----
+        none
+        '''
+
         if triples == -1:
             triples = self.triples
 
@@ -481,7 +783,6 @@ class Autofit:
             m = 0
             p = ProgressBar(len(triples))
 
-
         for x in triples:
             fit = spfit.spfitAsym(fname = self.prefix + '_f', A=A, B=B, C=C)
             fit.lin_content['freq'] = np.array([p0[x[0]], p1[x[1]], p2[x[2]]])
@@ -495,7 +796,6 @@ class Autofit:
                     p.animate(m)
                 m += 1
 
-
             if fit.fit_content['err_mw_rms'] >= 0. and fit.fit_content['err_mw_rms'] < .1 and fit.fit_content['reject'] == False and fit.fit_content['err_new_rms'] < 1.:
 
                 A = fit.par_fitpar['par'][0]; B = fit.par_fitpar['par'][1]
@@ -503,7 +803,7 @@ class Autofit:
 
                 err = fit.fit_content['err_mw_rms']
 
-                ind_p, ind_l, qn_, omc = self.assign(A, B, C)
+                ind_p, freq_, qn_, omc = self.assign(A, B, C)
                 N = len(ind_p)
 
                 if len(ind_p) >= self.params['min_N_lines']:
@@ -515,7 +815,24 @@ class Autofit:
 
         return self.result
 
-    def run_autofit_GWDG(self, triples=-1, verbose=False):
+
+    def run_autofit_GWDG(self, triples=-1):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         if triples == -1:
             triples = self.triples
 
@@ -544,7 +861,7 @@ class Autofit:
 
                 err = fit.fit_content['err_mw_rms']
 
-                ind_p, ind_l, qn_, omc = self.assign(A, B, C)
+                ind_p, freq_, qn_, omc = self.assign(A, B, C)
                 N = len(ind_p)
 
                 if len(ind_p) >= self.params['min_N_lines']:
@@ -558,12 +875,45 @@ class Autofit:
 
 
     def write_report(self):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         fname = self.report + '_result.txt'
         if len(self.result):
             fmt = ('%.2f', '%.2f', '%.2f', '%d','%.2e')
             np.savetxt(fname, self.result, fmt=fmt)
 
+
     def refit(self, A, B, C, err, peaks, qn):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         fit = spfit.spfitAsym(fname=self.prefix+'_rf', A=A, B=B, C=C)
         fit.lin_content['freq'] = peaks
         fit.lin_content['qn'] = qn
@@ -573,17 +923,33 @@ class Autofit:
 
         if fit.fit_content['err_mw_rms'] >= 0 and fit.fit_content['err_mw_rms'] < .1:
             rot = fit.var_fitpar['par']
-            ind_p, ind_l, qn_, omc_ = self.assign(rot[0], rot[1], rot[2])
+            ind_p, freq_, qn_, omc_ = self.assign(rot[0], rot[1], rot[2])
             A = fit.var_fitpar['par'][0]; B = fit.var_fitpar['par'][1]
             C = fit.var_fitpar['par'][2];
             fitted = fit.fit_content['N_fitted_lines']
 
-            return A, B, C, ind_p, ind_l, qn_, fitted, omc_, True
+            return A, B, C, ind_p, freq_, qn_, fitted, omc_, True
 
         else:
             return A, B, C, [-1], [-1], [-1], -1, -1, False
 
+
     def create_random_seed(self, A, B, C, delta, N):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
 
         if type(delta) == list or type(delta) == np.ndarray:
             if len(delta) == 3:
@@ -599,7 +965,23 @@ class Autofit:
 
         return self.check_const(A_H, B_H, C_H)
 
+
     def check_const(self, A, B, C):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
 
         h = B-C; h = np.where(h[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
         h = A-C; h = np.where(h[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
@@ -611,7 +993,23 @@ class Autofit:
 
         return A, B, C
 
+
     def read_result(self, path=''):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
 
         if path == '':
             path = os.getcwd()
@@ -640,8 +1038,24 @@ class Autofit:
         else:
             return np.array([])
 
+
     def refine_result(self, n = 1000, err=.0, limit=0.05):
-        #TODO: Add progress bar
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         if len(self.result) > 0:
             if err == .0:
                 err = self.params['bw']
@@ -649,13 +1063,13 @@ class Autofit:
             result = np.array([])
 
             for x in self.result[:n]:
-                ind_p, ind_l, qn_, omc_ = self.assign(x[0], x[1], x[2])
+                ind_p, freq_, qn_, omc_ = self.assign(x[0], x[1], x[2])
                 check = True; A_ = x[0]; B_ = x[1]; C_ = x[2]; N_=len(ind_p)
 
                 while len(ind_p) >= self.params['min_N_lines'] and err > limit and check:
                     peaks_h = self.peaks['all'][ind_p][:,0]
-                    qn_h = spfit.convert_qn_cat_lin(qn_[ind_l])
-                    A_, B_, C_, ind_p, ind_l, qn_, N_, omc_, check = self.refit(A_, B_, C_, err, peaks_h, qn_h)
+                    qn_h = spfit.convert_qn_cat_lin(qn_)
+                    A_, B_, C_, ind_p, freq_, qn_, N_, omc_, check = self.refit(A_, B_, C_, err, peaks_h, qn_h)
                     err /= 2.
 
                 h = np.array([A_, B_, C_, N_, omc_])
@@ -667,7 +1081,23 @@ class Autofit:
 
             return h
 
+
     def plot_result(self, n=1000, dim=.0):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
 
         import matplotlib.pyplot as plt
         import matplotlib as mplib
@@ -712,15 +1142,29 @@ class Autofit:
             ax.azim = -55
             ax.elev = 25
 
-            #cx = fig.add_axes([0.9, 0.1, 0.03, 0.8])
             bx = fig.add_axes([0.85, 0.3, 0.03, 0.4])
             cb = mplib.colorbar.ColorbarBase(bx, cmap=cmap, norm=norm)
-            #fig.set_tight_layout(True)
             cb.set_label('fitness: N. of lines')
 
             return fig, ax
 
-    def print_result(self, start=0, stop=100):
+    def print_result(self, start=0, stop=100, sort='n_lines'):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         if len(self.result) > 0:
             print 'N\tA\tB\t C\t\tN_lines\t\t err\n\n'
 
@@ -731,7 +1175,24 @@ class Autofit:
                 print h
                 i += 1
 
+
     def run_autofit_parallel(self, N):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         import multiprocessing
 
         def run_parallel(fname, i):
@@ -757,7 +1218,24 @@ class Autofit:
         self.read_result()
         self.del_files(del_all=True)
 
+
     def easy_fit(self, n_dep=10, bw_rot=20.):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         self.lin_dependence(n_dep)
         self.det_limits_rot(bw_rot)
         self.det_peaks()
@@ -766,7 +1244,24 @@ class Autofit:
 
         return self.params['N_triples_total']
 
+
     def plot_comparison(self, n=0, spec=np.array([]), scale=1.):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         import matplotlib.pyplot as plt
 
         if type(n) == int:
@@ -787,21 +1282,12 @@ class Autofit:
                 A = self.result[i][0]; B = self.result[i][1]
                 C = self.result[i][2]
 
-                ind_p, ind_l, qn, omc = self.assign(A, B, C)
+                ind_p, freq, qn, omc = self.assign(A, B, C)
 
                 pred = spfit.spfitAsym(fname = self.prefix + '_a', A=A, B=B, C=C)
                 pred.read_var()
                 pred.read_int()
                 pred.read_cat()
-
-                if cutoff < 0:
-                    lines = np.where(pred.cat_content['lgint'] > cutoff)[0]
-
-                else:
-                    h = pred.cat_content['lgint'][np.argsort(pred.cat_content['lgint'])][-cutoff:]
-                    lines = np.where(pred.cat_content['lgint'] > min(h))[0]
-
-                lines = pred.cat_content['freq'][lines]
 
                 pred.make_spec_cat()
 
@@ -809,7 +1295,7 @@ class Autofit:
                     color=colors[k], label=str(i))
 
                 for j in range(len(ind_p)):
-                    h = np.array([self.peaks['all'][ind_p[j]][0], lines[ind_l[j]]])
+                    h = np.array([self.peaks['all'][ind_p[j]][0], freq[j]])
                     ax.plot(h, np.zeros(2), 'o-', color=colors[k])
 
                 k += 1
@@ -818,7 +1304,24 @@ class Autofit:
             ax.set_ylabel('intensity (arb. units)')
             ax.legend()
 
+
     def export_spfit_files(self, n=0, name=''):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         if name == '':
             name = self.prefix + '_export'
 
@@ -830,10 +1333,10 @@ class Autofit:
             dipA = self.pred['dipA']; dipB = self.pred['dipB']
             dipC = self.pred['dipC']
 
-            ind_p, ind_l, qn_, omc_ = self.assign(A, B, C)
+            ind_p, freq_, qn_, omc_ = self.assign(A, B, C)
 
             peaks = self.peaks['all'][ind_p][:,0]
-            qn = spfit.convert_qn_cat_lin(qn_[ind_l])
+            qn = spfit.convert_qn_cat_lin(qn_)
 
             expt = spfit.spfitAsym(fname=name, A=A, B=B, C=C, dipA=dipA,
                 dipB=dipB, dipC=dipC)
@@ -848,26 +1351,22 @@ class Autofit:
 
 ################################################################################
 
-def create_random_seed(A, B, C, delta, N):
-    A_H = (np.random.rand(N)*2.-1.)*delta + A
-    B_H = (np.random.rand(N)*2.-1.)*delta + B
-    C_H = (np.random.rand(N)*2.-1.)*delta + C
-
-    return check_const(A_H, B_H, C_H)
-
-def check_const(A, B, C):
-
-    h = B-C; h = np.where(h[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
-    h = A-C; h = np.where(h[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
-    h = A-B; h = np.where(h[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
-
-    h = np.where(A[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
-    h = np.where(B[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
-    h = np.where(C[:] > 0)[0]; A = A[h]; B = B[h]; C=C[h]
-
-    return A, B, C
-
 def create_tasks(afit, N_tasks=2, seq=True, ret=False):
+    '''
+    Comment.
+
+    Parameters
+    ----------
+    para1 (data type):
+
+    Returns
+    -------
+    return 1 (data type):
+
+    Notes
+    -----
+    none
+    '''
 
     import pickle
     tasks = list([])
@@ -879,7 +1378,7 @@ def create_tasks(afit, N_tasks=2, seq=True, ret=False):
                 start = i * N_total/N_tasks
                 stop = (i+1) * N_total/N_tasks
                 h = cp.deepcopy(afit)
-                h.define_triples(start=start, stop=stop, itera=-1)
+                h.define_triples(start=start, stop=stop, stepsize=-1)
                 h.triples_all = np.array([])
                 h.prefix = h.prefix + '_' + str(i)
                 pickle.dump(h, output, pickle.HIGHEST_PROTOCOL)
@@ -890,9 +1389,9 @@ def create_tasks(afit, N_tasks=2, seq=True, ret=False):
         else:
             for i in range(N_tasks):
                 start = i
-                itera = N_tasks
+                stepsize = N_tasks
                 h = cp.deepcopy(afit)
-                h.define_triples(start=start, stop=-1, itera=itera)
+                h.define_triples(start=start, stop=-1, stepsize=stepsize)
                 h.triples_all = np.array([])
                 h.prefix = h.prefix + '_' + str(i)
                 pickle.dump(h, output, pickle.HIGHEST_PROTOCOL)
@@ -902,7 +1401,23 @@ def create_tasks(afit, N_tasks=2, seq=True, ret=False):
 
     return tasks
 
+
 def load_task(name, tasks_id=-1):
+    '''
+    Comment.
+
+    Parameters
+    ----------
+    para1 (data type):
+
+    Returns
+    -------
+    return 1 (data type):
+
+    Notes
+    -----
+    none
+    '''
 
     import pickle
 
@@ -936,6 +1451,22 @@ def load_task(name, tasks_id=-1):
 
 class GwdgJobs():
     def __init__(self, job='test', path='', queue='mpi-short'):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         self.job = job
         self.queue = queue
         self.filelist = []
@@ -980,7 +1511,22 @@ class GwdgJobs():
 
 
     def del_files(self, ext='job', rm_batch = True):
-        #
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         import glob
         if len(glob.glob('*.' + ext)) > 0:
             for x in glob.glob('*.' + ext):
@@ -989,7 +1535,23 @@ class GwdgJobs():
             if len(glob.glob('batch.sh')) > 0:
                 os.remove('batch.sh')
 
+
     def write_job_files(self, queue=''):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
 
         self.header = self.make_header(self.message, queue)
         self.del_files()
@@ -1011,7 +1573,22 @@ class GwdgJobs():
 
 
     def make_header(self, message=False, queue=''):
-        #
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         if message == True:
             self.header += '#BSUB -N\n'
         else:
@@ -1025,13 +1602,43 @@ class GwdgJobs():
         return self.header.format(self.queue, self.walltime[self.queue])
 
     def make_body(self, i):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         return self.body.format(self.job, i)
 
     def write_batch_file(self):
+        '''
+        Comment.
+
+        Parameters
+        ----------
+        para1 (data type):
+
+        Returns
+        -------
+        return 1 (data type):
+
+        Notes
+        -----
+        none
+        '''
+
         #TODO: Fix newline
         f = open(os.path.join(self.path, 'batch.sh'), 'w+')
         for x in self.filelist:
             f.write('bsub < ' + x + '\n')
         f.close()
-
-################################################################################
